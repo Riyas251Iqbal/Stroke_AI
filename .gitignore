@@ -1,0 +1,80 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+
+# Build output
+dist/
+dist-ssr/
+build/
+*.local
+
+# Database files
+*.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Debug and temp files
+debug_*.py
+debug_*.txt
+verify_*.py
+verification_*.txt
+inspect_*.py
+inspect_*.txt
+server_output*.txt
+results.txt
+pip_list.txt
+failure_details.txt
+encoders_info.txt
+feature_columns.txt
+
+# One-off scripts
+export_database.py
+check_user_address.py
+fix_user_address.py
+apply_migration.py
+run_migration.py
+run_migration_002.py
+create_emergency.py
+create_grouping_test.py
+view_database_data.py
+database_export_*.txt
+
+# Test scripts
+test_*.py
+
+# Backup files
+*_backup*
+*.backup
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.pnp
+.pnp.js
+
+# Audio uploads
+stroke-ai/backend/audio/
+
+# Frontend backups
+stroke-ai/frontend/src_backup*/
+
+# Git commit script
+create_commits.ps1
+
+# Coverage
+/coverage
