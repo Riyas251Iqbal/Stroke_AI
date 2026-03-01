@@ -1,0 +1,62 @@
+{
+  "training_date": "2026-02-12T20:06:21.030268",
+  "clinical_model": {
+    "type": "Logistic Regression",
+    "features": [
+      "gender",
+      "age",
+      "hypertension",
+      "heart_disease",
+      "ever_married",
+      "Residence_type",
+      "avg_glucose_level",
+      "bmi",
+      "smoking_status",
+      "work_Govt_job",
+      "work_Never_worked",
+      "work_Private",
+      "work_Self-employed",
+      "work_children",
+      "bmi_category",
+      "glucose_category",
+      "age_risk",
+      "risk_factors"
+    ],
+    "n_features": 18,
+    "train_samples": 4374,
+    "test_samples": 1022,
+    "performance": {
+      "accuracy": 0.8659491193737769,
+      "precision": 0.2229299363057325,
+      "recall": 0.7,
+      "f1_score": 0.33816425120772947,
+      "roc_auc": 0.8291563786008231
+    }
+  },
+  "preprocessing": {
+    "missing_bmi_filled": 201,
+    "categorical_encoding": "Label + One-Hot",
+    "class_balancing": "SMOTE + RandomUnderSampler",
+    "feature_scaling": "StandardScaler"
+  },
+  "ensemble_config": {
+    "clinical_weight": 0.6,
+    "audio_weight": 0.4
+  },
+  "triage_thresholds": {
+    "low_risk": "< 0.30",
+    "moderate_risk": "0.30 - 0.60",
+    "high_risk": "0.60 - 0.85",
+    "emergency": ">= 0.85"
+  },
+  "audio_model": {
+    "type": "GradientBoostingClassifier",
+    "feature_dim": 37,
+    "train_samples": 14118,
+    "test_samples": 3530,
+    "performance": {
+      "accuracy": 0.9269121813031161,
+      "roc_auc": 0.9790205871655856
+    }
+  }
+}
