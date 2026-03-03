@@ -72,3 +72,12 @@ frontend/src_backup*/
 
 # Git commit script
 create_commits.ps1
+
+# Virtual environment
+.venv/
+
+# Video uploads
+backend/video/uploads/
+
+# Confusion matrices and training images (large files)
+backend/models/*.png
