@@ -91,6 +91,32 @@ CREATE TABLE IF NOT EXISTS audio_records (
     mfcc_features TEXT,  -- Mean MFCC coefficients
     prosody_features TEXT,  -- Pitch, energy, rhythm
     timing_features TEXT,  -- Speech rate, pauses
+    audio_model_features TEXT,  -- 274-feature set for new audio model
+    
+    -- Processing status
+    processing_status TEXT DEFAULT 'pending' CHECK(processing_status IN ('pending', 'processed', 'failed')),
+    processing_notes TEXT,
+    
+    FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (clinical_submission_id) REFERENCES clinical_submissions(id) ON DELETE SET NULL
+);
+
+-- Video records - Facial analysis for stroke detection
+CREATE TABLE IF NOT EXISTS video_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id INTEGER NOT NULL,
+    clinical_submission_id INTEGER,
+    video_filename TEXT NOT NULL,
+    video_path TEXT NOT NULL,
+    upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Prediction results
+    risk_score REAL,
+    severity TEXT,
+    region_scores TEXT,    -- JSON: per-region risk scores
+    region_labels TEXT,    -- JSON: per-region severity labels
+    region_confidences TEXT, -- JSON: per-region confidence
+    confidence REAL,
     
     -- Processing status
     processing_status TEXT DEFAULT 'pending' CHECK(processing_status IN ('pending', 'processed', 'failed')),
@@ -106,6 +132,7 @@ CREATE TABLE IF NOT EXISTS triage_results (
     patient_id INTEGER NOT NULL,
     clinical_submission_id INTEGER NOT NULL,
     audio_record_id INTEGER,
+    video_record_id INTEGER,
     
     -- Triage assessment
     risk_score REAL NOT NULL CHECK(risk_score >= 0 AND risk_score <= 1),
@@ -125,6 +152,10 @@ CREATE TABLE IF NOT EXISTS triage_results (
     -- Clinical interpretation
     clinical_flags TEXT,  -- JSON array of concerning features
     recommendation TEXT NOT NULL,
+    
+    -- Video analysis results (stored for quick access)
+    video_severity TEXT,
+    video_region_details TEXT,  -- JSON
     
     -- Timestamps
     assessment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -153,6 +184,7 @@ CREATE TABLE IF NOT EXISTS triage_results (
     FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (clinical_submission_id) REFERENCES clinical_submissions(id) ON DELETE CASCADE,
     FOREIGN KEY (audio_record_id) REFERENCES audio_records(id) ON DELETE SET NULL,
+    FOREIGN KEY (video_record_id) REFERENCES video_records(id) ON DELETE SET NULL,
     FOREIGN KEY (reviewed_by_doctor) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
     FOREIGN KEY (preferred_doctor_id) REFERENCES users(id) ON DELETE SET NULL
