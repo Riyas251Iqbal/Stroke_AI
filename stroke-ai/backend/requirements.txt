@@ -7,3 +7,8 @@ scikit-learn==1.4.2
 werkzeug
 pandas
 joblib
+torch
+torchvision
+timm
+Pillow
+opencv-python-headless
