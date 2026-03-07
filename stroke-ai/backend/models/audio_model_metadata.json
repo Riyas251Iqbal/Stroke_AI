@@ -1,0 +1,25 @@
+{
+  "model_type": "VotingClassifier (RandomForest + GradientBoosting)",
+  "n_features": 274,
+  "classes": [
+    "control",
+    "dysarthric"
+  ],
+  "sample_rate": 16000,
+  "n_mfcc": 40,
+  "hop_length": 512,
+  "n_fft": 2048,
+  "max_duration": 10,
+  "n_epochs_cv": 10,
+  "n_estimators_rf": 300,
+  "smote_applied": true,
+  "training_samples": 18322,
+  "test_samples": 3519,
+  "cv_mean_accuracy": 0.9834,
+  "cv_mean_f1": 0.9834,
+  "cv_mean_auc": 0.9987,
+  "test_accuracy": 0.9821,
+  "test_f1": 0.9821,
+  "test_auc": 0.9982,
+  "best_epoch_auc": 0.9993
+}
