@@ -1,0 +1,90 @@
+{
+  "model_type": "EfficientNet-B3 (Transfer Learning + Gradual Unfreezing)",
+  "regions": [
+    "Eye",
+    "Eyebrow",
+    "Mouth"
+  ],
+  "severity_classes": [
+    "Mild",
+    "Moderate",
+    "Moderate Severe",
+    "Severe"
+  ],
+  "severity_risk_map": {
+    "mild": 0.25,
+    "moderate": 0.5,
+    "moderate severe": 0.75,
+    "severe": 1.0
+  },
+  "region_weights": {
+    "Eye": 0.3,
+    "Eyebrow": 0.25,
+    "Mouth": 0.45
+  },
+  "img_size": 224,
+  "total_epochs": 30,
+  "imagenet_mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "imagenet_std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "region_configs": {
+    "Eye": {
+      "model_path": "video_model_eye.pth",
+      "architecture": "EfficientNet-B3",
+      "num_classes": 4,
+      "class_names": [
+        "Mild",
+        "Moderate",
+        "Moderate Severe",
+        "Severe"
+      ],
+      "img_size": 224,
+      "test_accuracy": 0.9984,
+      "test_f1": 0.9984,
+      "test_auc": 1.0,
+      "best_val_f1": 0.9984,
+      "region_weight": 0.3
+    },
+    "Eyebrow": {
+      "model_path": "video_model_eyebrow.pth",
+      "architecture": "EfficientNet-B3",
+      "num_classes": 4,
+      "class_names": [
+        "Mild",
+        "Moderate",
+        "Moderate Severe",
+        "Severe"
+      ],
+      "img_size": 224,
+      "test_accuracy": 0.9968,
+      "test_f1": 0.9968,
+      "test_auc": 1.0,
+      "best_val_f1": 0.9989,
+      "region_weight": 0.25
+    },
+    "Mouth": {
+      "model_path": "video_model_mouth.pth",
+      "architecture": "EfficientNet-B3",
+      "num_classes": 4,
+      "class_names": [
+        "Mild",
+        "Moderate",
+        "Moderate Severe",
+        "Severe"
+      ],
+      "img_size": 224,
+      "test_accuracy": 1.0,
+      "test_f1": 1.0,
+      "test_auc": 1.0,
+      "best_val_f1": 1.0,
+      "region_weight": 0.45
+    }
+  }
+}
