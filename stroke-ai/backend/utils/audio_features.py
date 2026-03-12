@@ -283,6 +283,182 @@ class AudioFeatureExtractor:
             json.dump(features, f, indent=2)
 
 
+def extract_features_for_model(audio_path: str,
+                                sample_rate: int = 16000,
+                                n_mfcc: int = 40,
+                                hop_length: int = 512,
+                                n_fft: int = 2048,
+                                max_duration: float = 10.0) -> Optional[Dict[str, float]]:
+    """
+    Extract 274 features matching the new audio_stroke_model.pkl expectations.
+    
+    Feature breakdown:
+      - 40 MFCC mean + 40 MFCC std = 80
+      - 40 delta MFCC mean + 40 delta MFCC std = 80
+      - 40 delta² MFCC mean + 40 delta² MFCC std = 80
+      - Spectral: centroid, bandwidth, rolloff, flatness (mean+std) = 8
+      - ZCR (mean+std) = 2
+      - Spectral contrast (7 bands mean) = 7
+      - Chroma (mean+std) = 2
+      - Mel spectrogram (mean+std) = 2
+      - F0: mean, std, range, voiced_fraction = 4
+      - RMS (mean+std) = 2
+      - Onset: rate, strength_mean, strength_std = 3
+      - Duration, silence_ratio, tempo, hnr_proxy = 4
+      Total = 274
+    
+    Args:
+        audio_path: Path to the audio file
+        sample_rate: Target sample rate (must match training: 16000)
+        n_mfcc: Number of MFCC coefficients (must match training: 40)
+        hop_length: Hop length for STFT
+        n_fft: FFT window size
+        max_duration: Maximum audio duration in seconds
+        
+    Returns:
+        Dictionary mapping feature names to float values, or None on failure
+    """
+    try:
+        # Load and preprocess audio
+        y, sr = librosa.load(audio_path, sr=sample_rate, mono=True,
+                             duration=max_duration)
+        
+        if len(y) == 0:
+            return None
+        
+        features = {}
+        
+        # ── MFCCs + deltas ──────────────────────────────────────────
+        mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc,
+                                      hop_length=hop_length, n_fft=n_fft)
+        delta_mfccs = librosa.feature.delta(mfccs)
+        delta2_mfccs = librosa.feature.delta(mfccs, order=2)
+        
+        for i in range(n_mfcc):
+            features[f'mfcc_mean_{i}'] = float(np.mean(mfccs[i]))
+            features[f'mfcc_std_{i}'] = float(np.std(mfccs[i]))
+        
+        for i in range(n_mfcc):
+            features[f'delta_mfcc_mean_{i}'] = float(np.mean(delta_mfccs[i]))
+            features[f'delta_mfcc_std_{i}'] = float(np.std(delta_mfccs[i]))
+        
+        for i in range(n_mfcc):
+            features[f'delta2_mfcc_mean_{i}'] = float(np.mean(delta2_mfccs[i]))
+            features[f'delta2_mfcc_std_{i}'] = float(np.std(delta2_mfccs[i]))
+        
+        # ── Spectral features ──────────────────────────────────────
+        spec_centroid = librosa.feature.spectral_centroid(y=y, sr=sr,
+                                                          hop_length=hop_length)
+        features['spec_centroid_mean'] = float(np.mean(spec_centroid))
+        features['spec_centroid_std'] = float(np.std(spec_centroid))
+        
+        spec_bw = librosa.feature.spectral_bandwidth(y=y, sr=sr,
+                                                      hop_length=hop_length)
+        features['spec_bandwidth_mean'] = float(np.mean(spec_bw))
+        features['spec_bandwidth_std'] = float(np.std(spec_bw))
+        
+        spec_rolloff = librosa.feature.spectral_rolloff(y=y, sr=sr,
+                                                         hop_length=hop_length)
+        features['spec_rolloff_mean'] = float(np.mean(spec_rolloff))
+        features['spec_rolloff_std'] = float(np.std(spec_rolloff))
+        
+        spec_flat = librosa.feature.spectral_flatness(y=y, hop_length=hop_length)
+        features['spec_flatness_mean'] = float(np.mean(spec_flat))
+        features['spec_flatness_std'] = float(np.std(spec_flat))
+        
+        # ── Zero Crossing Rate ─────────────────────────────────────
+        zcr = librosa.feature.zero_crossing_rate(y, hop_length=hop_length)
+        features['zcr_mean'] = float(np.mean(zcr))
+        features['zcr_std'] = float(np.std(zcr))
+        
+        # ── Spectral Contrast (7 bands) ───────────────────────────
+        spec_contrast = librosa.feature.spectral_contrast(y=y, sr=sr,
+                                                           hop_length=hop_length)
+        for band_i in range(min(7, spec_contrast.shape[0])):
+            features[f'spec_contrast_band{band_i}_mean'] = float(
+                np.mean(spec_contrast[band_i])
+            )
+        
+        # ── Chroma ─────────────────────────────────────────────────
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr, hop_length=hop_length)
+        features['chroma_mean'] = float(np.mean(chroma))
+        features['chroma_std'] = float(np.std(chroma))
+        
+        # ── Mel spectrogram ────────────────────────────────────────
+        mel = librosa.feature.melspectrogram(y=y, sr=sr, hop_length=hop_length)
+        features['mel_mean'] = float(np.mean(mel))
+        features['mel_std'] = float(np.std(mel))
+        
+        # ── F0 (fundamental frequency) ─────────────────────────────
+        f0, voiced_flag, _ = librosa.pyin(y, fmin=65, fmax=600,
+                                           sr=sr, hop_length=hop_length)
+        f0_valid = f0[~np.isnan(f0)] if f0 is not None else np.array([0.0])
+        if len(f0_valid) == 0:
+            f0_valid = np.array([0.0])
+        
+        features['f0_mean'] = float(np.mean(f0_valid))
+        features['f0_std'] = float(np.std(f0_valid))
+        features['f0_range'] = float(np.ptp(f0_valid))
+        features['voiced_fraction'] = float(
+            np.sum(voiced_flag) / len(voiced_flag)
+        ) if voiced_flag is not None and len(voiced_flag) > 0 else 0.0
+        
+        # ── RMS energy ─────────────────────────────────────────────
+        rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+        features['rms_mean'] = float(np.mean(rms))
+        features['rms_std'] = float(np.std(rms))
+        
+        # ── Onset features ─────────────────────────────────────────
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr,
+                                                  hop_length=hop_length)
+        onsets = librosa.onset.onset_detect(y=y, sr=sr,
+                                             hop_length=hop_length)
+        duration_sec = float(len(y) / sr)
+        
+        features['onset_rate'] = float(
+            len(onsets) / duration_sec
+        ) if duration_sec > 0 else 0.0
+        features['onset_strength_mean'] = float(np.mean(onset_env))
+        features['onset_strength_std'] = float(np.std(onset_env))
+        
+        # ── Timing / global features ──────────────────────────────
+        features['duration_sec'] = duration_sec
+        
+        # Silence ratio
+        rms_threshold = np.mean(rms) * 0.3
+        silence_frames = np.sum(rms < rms_threshold)
+        features['silence_ratio'] = float(
+            silence_frames / len(rms)
+        ) if len(rms) > 0 else 0.0
+        
+        # Tempo
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr, hop_length=hop_length)
+        features['tempo'] = float(tempo) if np.isscalar(tempo) else float(tempo[0])
+        
+        # HNR proxy (harmonic-to-noise ratio approximation)
+        harmonic = librosa.effects.harmonic(y)
+        noise = y - harmonic
+        h_energy = float(np.sum(harmonic ** 2))
+        n_energy = float(np.sum(noise ** 2))
+        features['hnr_proxy'] = float(
+            10 * np.log10(h_energy / n_energy)
+        ) if n_energy > 1e-10 else 40.0
+        
+        # Replace any NaN/Inf
+        for k in features:
+            v = features[k]
+            if not np.isfinite(v):
+                features[k] = 0.0
+        
+        return features
+        
+    except Exception as e:
+        print(f"[ERROR] Audio feature extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 # Utility function for easy feature extraction
 def extract_speech_features(audio_path: str) -> Dict[str, any]:
     """
