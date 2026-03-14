@@ -28,7 +28,8 @@ def init_database() -> None:
         cursor = conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
         if cursor.fetchone():
-            # Database already initialized
+            # Database already initialized — run migrations only
+            _run_migrations(conn)
             return
 
         with open(SCHEMA_PATH, 'r') as f:
@@ -46,6 +47,62 @@ def init_database() -> None:
             raise
     finally:
         conn.close()
+
+
+def _run_migrations(conn) -> None:
+    """
+    Run incremental migrations for schema changes on existing databases.
+    Each migration checks if it's already been applied before executing.
+    """
+    cursor = conn.cursor()
+    
+    # Migration 1: Add video_records table
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='video_records'")
+    if not cursor.fetchone():
+        print("  [MIGRATION] Creating video_records table...")
+        cursor.executescript("""
+            CREATE TABLE IF NOT EXISTS video_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                patient_id INTEGER NOT NULL,
+                clinical_submission_id INTEGER,
+                video_filename TEXT NOT NULL,
+                video_path TEXT NOT NULL,
+                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                risk_score REAL,
+                severity TEXT,
+                region_scores TEXT,
+                region_labels TEXT,
+                region_confidences TEXT,
+                confidence REAL,
+                processing_status TEXT DEFAULT 'pending',
+                processing_notes TEXT,
+                FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (clinical_submission_id) REFERENCES clinical_submissions(id) ON DELETE SET NULL
+            );
+        """)
+        print("  [OK] video_records table created")
+    
+    # Migration 2: Add video columns to triage_results
+    cursor.execute("PRAGMA table_info(triage_results)")
+    existing_cols = {row[1] for row in cursor.fetchall()}
+    
+    if 'video_record_id' not in existing_cols:
+        print("  [MIGRATION] Adding video columns to triage_results...")
+        cursor.execute("ALTER TABLE triage_results ADD COLUMN video_record_id INTEGER")
+        cursor.execute("ALTER TABLE triage_results ADD COLUMN video_severity TEXT")
+        cursor.execute("ALTER TABLE triage_results ADD COLUMN video_region_details TEXT")
+        print("  [OK] video columns added to triage_results")
+    
+    # Migration 3: Add audio_model_features to audio_records
+    cursor.execute("PRAGMA table_info(audio_records)")
+    audio_cols = {row[1] for row in cursor.fetchall()}
+    
+    if 'audio_model_features' not in audio_cols:
+        print("  [MIGRATION] Adding audio_model_features to audio_records...")
+        cursor.execute("ALTER TABLE audio_records ADD COLUMN audio_model_features TEXT")
+        print("  [OK] audio_model_features column added")
+    
+    conn.commit()
 
 
 @contextmanager

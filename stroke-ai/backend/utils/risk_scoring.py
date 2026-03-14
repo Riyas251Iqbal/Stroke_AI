@@ -1,12 +1,13 @@
 """
 Early Stroke Risk Scoring Engine
-Evaluates clinical and audio features to compute stroke risk scores
+Evaluates clinical, audio, and video features to compute stroke risk scores
 for the Clinical Decision Support System (CDSS).
 
-Supports the dual-model architecture:
+Supports the tri-model architecture:
   - Clinical Model: Logistic Regression (18 features)
-  - Audio Model: GradientBoosting Classifier (37 features)
-  - Ensemble: Weighted combination (default 60% clinical + 40% audio)
+  - Audio Model: VotingClassifier (274 features) — dysarthria detection
+  - Video Model: EfficientNet-B3 (Eye/Eyebrow/Mouth) — facial asymmetry
+  - Ensemble: Weighted combination (50% clinical + 25% audio + 25% video)
 """
 
 import numpy as np
@@ -37,15 +38,27 @@ class StrokeRiskScorer:
         
         self.models_dir = models_dir
         self.clinical_model = None
-        self.audio_model = None
         self.clinical_scaler = None
-        self.audio_scaler = None
-        self.feature_names = None
         self.metadata = None
         
-        # Ensemble weights (defaults, overridden by metadata)
+        # Old audio model (kept for backward compat)
+        self.audio_model = None
+        self.audio_scaler = None
+        self.feature_names = None
+        
+        # New audio stroke model (VotingClassifier, 274 features)
+        self.new_audio_model = None
+        self.new_audio_scaler = None
+        self.new_audio_imputer = None
+        self.new_audio_feature_names = None
+        
+        # Tri-model ensemble weights
+        # When all 3 available: 50% clinical + 25% audio + 25% video
+        # When clinical + audio only: 60% clinical + 40% audio
+        # When clinical + video only: 60% clinical + 40% video
         self.clinical_weight = 0.6
         self.audio_weight = 0.4
+        self.video_weight = 0.0  # Set dynamically when video data is present
         
         # Triage thresholds (defaults, overridden by metadata)
         self.thresholds = {
@@ -58,6 +71,7 @@ class StrokeRiskScorer:
     
     def _load_models(self):
         """Load all model components from the models directory."""
+        # Legacy models
         files = {
             'clinical_model': 'clinical_model.pkl',
             'audio_model': 'audio_model.pkl',
@@ -82,6 +96,32 @@ class StrokeRiskScorer:
             except Exception as e:
                 print(f"  Error loading {filename}: {e}")
         
+        # New audio stroke model (VotingClassifier, 274 features)
+        new_audio_files = {
+            'new_audio_model': 'audio_stroke_model.pkl',
+            'new_audio_scaler': 'audio_scaler.pkl',
+            'new_audio_imputer': 'audio_imputer.pkl',
+        }
+        
+        for attr, filename in new_audio_files.items():
+            path = os.path.join(self.models_dir, filename)
+            if not os.path.exists(path):
+                print(f"  Warning: {filename} not found")
+                continue
+            try:
+                setattr(self, attr, joblib.load(path))
+            except Exception as e:
+                print(f"  Error loading {filename}: {e}")
+        
+        # Load new audio feature names
+        feat_names_path = os.path.join(self.models_dir, 'audio_feature_names.json')
+        if os.path.exists(feat_names_path):
+            try:
+                with open(feat_names_path, 'r') as f:
+                    self.new_audio_feature_names = json.load(f)
+            except Exception as e:
+                print(f"  Error loading audio_feature_names.json: {e}")
+        
         # Apply metadata configuration
         if self.metadata:
             config = self.metadata.get('ensemble_config', {})
@@ -91,9 +131,11 @@ class StrokeRiskScorer:
         # Report status
         status = []
         if self.clinical_model: status.append('Clinical')
-        if self.audio_model: status.append('Audio')
+        if self.audio_model: status.append('Audio(legacy)')
+        if self.new_audio_model: status.append('Audio(new-274f)')
         if self.clinical_scaler: status.append('ClinicalScaler')
-        if self.audio_scaler: status.append('AudioScaler')
+        if self.new_audio_scaler: status.append('AudioScaler(new)')
+        if self.new_audio_imputer: status.append('AudioImputer')
         print(f"[OK] Models loaded successfully from {self.models_dir}")
         print(f"     Components: {', '.join(status)}")
     
@@ -196,7 +238,7 @@ class StrokeRiskScorer:
     
     def prepare_audio_features(self, audio_features: Optional[Dict]) -> Optional[np.ndarray]:
         """
-        Prepare audio features as a flat 37-element vector for the audio model.
+        Prepare audio features as a flat 37-element vector for the legacy audio model.
         
         Feature order matches get_feature_vector() from AudioFeatureExtractor:
         MFCC (15) + Prosody (12) + Timing (10) = 37
@@ -218,21 +260,68 @@ class StrokeRiskScorer:
         
         return np.array(feature_vector, dtype=float).reshape(1, -1)
     
+    def predict_new_audio_risk(self, audio_model_features: Optional[Dict]) -> Optional[float]:
+        """
+        Predict dysarthria risk using the new 274-feature audio stroke model.
+        
+        Args:
+            audio_model_features: Dict of 274 features from extract_features_for_model()
+            
+        Returns:
+            Probability of dysarthria (0.0 - 1.0), or None if unavailable
+        """
+        if not audio_model_features or not self.new_audio_model:
+            return None
+        
+        if not self.new_audio_feature_names:
+            print("  Warning: audio_feature_names.json not loaded")
+            return None
+        
+        try:
+            # Build feature vector in the exact order the model expects
+            X = np.array([
+                [audio_model_features.get(f, 0.0) for f in self.new_audio_feature_names]
+            ], dtype=np.float32)
+            
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            if self.new_audio_imputer:
+                X = self.new_audio_imputer.transform(X)
+            if self.new_audio_scaler:
+                X = self.new_audio_scaler.transform(X)
+            
+            prob = float(self.new_audio_model.predict_proba(X)[0][1])  # P(dysarthric)
+            return prob
+            
+        except Exception as e:
+            print(f"  Error in new audio model prediction: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
     # ──────────────────────────────────────────────
     # Risk Computation
     # ──────────────────────────────────────────────
     
     def compute_risk_score(self, clinical_data: Dict, 
-                          audio_features: Optional[Dict] = None) -> Tuple[float, float, str, bool]:
+                          audio_features: Optional[Dict] = None,
+                          audio_model_features: Optional[Dict] = None,
+                          video_risk_data: Optional[Dict] = None) -> Tuple[float, float, str, bool]:
         """
-        Compute early stroke risk score combining clinical and audio models.
+        Compute early stroke risk score combining clinical, audio, and video models.
+        
+        Args:
+            clinical_data: Clinical variables dict
+            audio_features: Legacy audio features (mfcc/prosody/timing dicts) for rule-based safety net
+            audio_model_features: New 274-feature dict from extract_features_for_model()
+            video_risk_data: Video prediction results from VideoFeatureExtractor.predict()
         
         Returns:
             Tuple of (risk_score, confidence, assessment_type, safety_net_triggered)
         """
         try:
             print("\n" + "="*60)
-            print("DIAGNOSTIC: Risk Scoring Engine (Dual Model)")
+            print("DIAGNOSTIC: Risk Scoring Engine (Tri-Model)")
             print("="*60)
             
             # 1. Clinical Risk (Hybrid: ML model + rule-based safety floor)
@@ -251,14 +340,10 @@ class StrokeRiskScorer:
                 model_clinical_risk = float(probs[0][1])
                 print(f"Clinical Model (unscaled): {model_clinical_risk:.4f}")
             
-            # Always compute rule-based clinical risk as a safety floor
-            # (the ML model is age-biased and underestimates risk for younger patients)
             rule_clinical_risk = self._calculate_rule_based_risk(clinical_data, None)
             print(f"Rule-Based Clinical Risk: {rule_clinical_risk:.4f}")
             
-            # Hybrid combination: blend ML + rules, never go below rule-based floor
             if model_clinical_risk > 0:
-                # 60% ML model + 40% rule-based, but always at least the rule-based score
                 clinical_risk = max(
                     0.6 * model_clinical_risk + 0.4 * rule_clinical_risk,
                     rule_clinical_risk
@@ -273,33 +358,38 @@ class StrokeRiskScorer:
             audio_risk = 0.0
             has_audio = False
             safety_net_triggered = False
-            assessment_type = 'clinical_only'
+            rule_audio_risk = 0.0
+            model_audio_risk = 0.0
             
-            if audio_features:
-                assessment_type = 'full'
+            if audio_features or audio_model_features:
                 has_audio = True
                 print("\n--- Audio Analysis ---")
                 
-                audio_vec = self.prepare_audio_features(audio_features)
-                
-                if audio_vec is not None and self.audio_model:
-                    if self.audio_scaler:
-                        scaled_audio = self.audio_scaler.transform(audio_vec)
-                    else:
-                        scaled_audio = audio_vec
-                    
-                    probs = self.audio_model.predict_proba(scaled_audio)
-                    model_audio_risk = float(probs[0][1]) if probs.shape[1] > 1 else 0.0
-                    print(f"Audio Model Prediction: {model_audio_risk:.4f}")
+                # Try new audio model first (274-feature VotingClassifier)
+                new_audio_risk = self.predict_new_audio_risk(audio_model_features)
+                if new_audio_risk is not None:
+                    print(f"New Audio Model (274f) Prediction: {new_audio_risk:.4f}")
+                    model_audio_risk = new_audio_risk
                 else:
-                    model_audio_risk = 0.0
-                    print("Audio model not available, using rules only")
+                    # Fall back to legacy audio model (37 features)
+                    audio_vec = self.prepare_audio_features(audio_features)
+                    if audio_vec is not None and self.audio_model:
+                        if self.audio_scaler:
+                            scaled_audio = self.audio_scaler.transform(audio_vec)
+                        else:
+                            scaled_audio = audio_vec
+                        probs = self.audio_model.predict_proba(scaled_audio)
+                        model_audio_risk = float(probs[0][1]) if probs.shape[1] > 1 else 0.0
+                        print(f"Legacy Audio Model Prediction: {model_audio_risk:.4f}")
+                    else:
+                        model_audio_risk = 0.0
+                        print("Audio models not available, using rules only")
                 
-                # Rule-based safety net
-                rule_audio_risk = self._calculate_audio_rule_risk(audio_features)
-                print(f"Rule-Based Audio Risk: {rule_audio_risk:.4f}")
+                # Rule-based safety net (uses legacy features)
+                if audio_features:
+                    rule_audio_risk = self._calculate_audio_rule_risk(audio_features)
+                    print(f"Rule-Based Audio Risk: {rule_audio_risk:.4f}")
                 
-                # Hybrid: trust the higher signal
                 audio_risk = max(model_audio_risk, rule_audio_risk)
                 
                 if rule_audio_risk > model_audio_risk + 0.2:
@@ -308,17 +398,56 @@ class StrokeRiskScorer:
                 
                 print(f"Final Audio Risk: {audio_risk:.4f}")
             else:
-                print("\n  No audio features - clinical only assessment")
+                print("\n  No audio features - skipping audio analysis")
             
-            # 3. Ensemble
-            if has_audio:
-                final_risk = (self.clinical_weight * clinical_risk) + (self.audio_weight * audio_risk)
+            # 3. Video Risk
+            video_risk = 0.0
+            has_video = False
+            
+            if video_risk_data and video_risk_data.get('risk_score') is not None:
+                has_video = True
+                video_risk = float(video_risk_data['risk_score'])
+                print(f"\n--- Video Analysis ---")
+                print(f"Video Risk Score: {video_risk:.4f}")
+                print(f"Video Severity: {video_risk_data.get('severity', 'N/A')}")
+                print(f"Region Scores: {video_risk_data.get('region_scores', {})}")
+                print(f"Region Labels: {video_risk_data.get('region_labels', {})}")
+            else:
+                print("\n  No video data - skipping video analysis")
+            
+            # 4. Determine assessment type
+            if has_audio and has_video:
+                assessment_type = 'full'
+            elif has_audio:
+                assessment_type = 'clinical_audio'
+            elif has_video:
+                assessment_type = 'clinical_video'
+            else:
+                assessment_type = 'clinical_only'
+            
+            # 5. Ensemble — dynamic weighting based on available modalities
+            print(f"\n--- Ensemble ({assessment_type}) ---")
+            
+            if has_audio and has_video:
+                # Tri-model: 50% clinical + 25% audio + 25% video
+                c_w, a_w, v_w = 0.50, 0.25, 0.25
+                final_risk = c_w * clinical_risk + a_w * audio_risk + v_w * video_risk
+                confidence = 0.90
+                print(f"Tri-Model: ({c_w}*{clinical_risk:.4f}) + ({a_w}*{audio_risk:.4f}) + ({v_w}*{video_risk:.4f}) = {final_risk:.4f}")
+            elif has_audio:
+                c_w, a_w = 0.60, 0.40
+                final_risk = c_w * clinical_risk + a_w * audio_risk
                 confidence = 0.85
-                print(f"\nEnsemble: ({self.clinical_weight}*{clinical_risk:.4f}) + ({self.audio_weight}*{audio_risk:.4f}) = {final_risk:.4f}")
+                print(f"Dual (C+A): ({c_w}*{clinical_risk:.4f}) + ({a_w}*{audio_risk:.4f}) = {final_risk:.4f}")
+            elif has_video:
+                c_w, v_w = 0.60, 0.40
+                final_risk = c_w * clinical_risk + v_w * video_risk
+                confidence = 0.85
+                print(f"Dual (C+V): ({c_w}*{clinical_risk:.4f}) + ({v_w}*{video_risk:.4f}) = {final_risk:.4f}")
             else:
                 final_risk = clinical_risk
                 confidence = 0.65
-                print(f"\nFinal Risk (clinical only): {final_risk:.4f}")
+                print(f"Clinical only: {final_risk:.4f}")
             
             # Confidence adjustments
             imputed_fields = clinical_data.get('imputed_fields', [])
@@ -326,16 +455,37 @@ class StrokeRiskScorer:
                 penalty = 0.05 * len(imputed_fields)
                 confidence = max(0.5, confidence - penalty)
             
-            # Safety net override for critical audio signs
+            # Safety net override for critical audio signs (rule-based)
             if has_audio and rule_audio_risk >= 0.8:
                 if final_risk < 0.85:
-                    print(f"(!) CRITICAL OVERRIDE: {final_risk:.4f} -> 0.85")
+                    print(f"(!) CRITICAL AUDIO OVERRIDE (rules): {final_risk:.4f} -> 0.85")
                     final_risk = 0.85
                     safety_net_triggered = True
             elif has_audio and rule_audio_risk >= 0.65:
                 if final_risk < 0.60:
-                    print(f"(!) SAFETY OVERRIDE: {final_risk:.4f} -> 0.60")
+                    print(f"(!) SAFETY AUDIO OVERRIDE (rules): {final_risk:.4f} -> 0.60")
                     final_risk = 0.60
+                    safety_net_triggered = True
+            
+            # Safety net override for ML model dysarthria detection
+            # The VotingClassifier (98% accuracy) predicts P(dysarthric);
+            # if it's high, slurred speech must escalate regardless of clinical risk.
+            if has_audio and model_audio_risk >= 0.80:
+                if final_risk < 0.85:
+                    print(f"(!) CRITICAL AUDIO OVERRIDE (ML model): {final_risk:.4f} -> 0.85 (P(dysarthric)={model_audio_risk:.4f})")
+                    final_risk = 0.85
+                    safety_net_triggered = True
+            elif has_audio and model_audio_risk >= 0.60:
+                if final_risk < 0.60:
+                    print(f"(!) SAFETY AUDIO OVERRIDE (ML model): {final_risk:.4f} -> 0.60 (P(dysarthric)={model_audio_risk:.4f})")
+                    final_risk = 0.60
+                    safety_net_triggered = True
+            
+            # Video safety net — severe facial asymmetry override
+            if has_video and video_risk >= 0.85:
+                if final_risk < 0.80:
+                    print(f"(!) VIDEO SEVERITY OVERRIDE: {final_risk:.4f} -> 0.80")
+                    final_risk = 0.80
                     safety_net_triggered = True
             
             print(f"Final Confidence Score: {confidence:.2f}")
@@ -487,6 +637,24 @@ class StrokeRiskScorer:
         
         return dict(sorted(importance.items(), key=lambda x: x[1], reverse=True))
     
+    def get_video_importance(self, video_risk_data: Optional[Dict]) -> Dict[str, float]:
+        """Calculate feature importance from video analysis results."""
+        importance = {}
+        if not video_risk_data or video_risk_data.get('risk_score') is None:
+            return importance
+        
+        region_scores = video_risk_data.get('region_scores', {})
+        region_labels = video_risk_data.get('region_labels', {})
+        
+        for region, score in region_scores.items():
+            label = region_labels.get(region, 'Unknown')
+            if score >= 0.75:
+                importance[f'{region} Asymmetry ({label})'] = score * 0.15
+            elif score >= 0.50:
+                importance[f'{region} Asymmetry ({label})'] = score * 0.10
+        
+        return importance
+    
     def get_clinical_flags(self, clinical_data: Dict, 
                           audio_features: Optional[Dict]) -> List[str]:
         """Identify concerning clinical indicators."""
@@ -532,6 +700,26 @@ class StrokeRiskScorer:
             
             if prosody.get('pitch_std', 50) < 15:
                 flags.append("Reduced speech prosody variability")
+        
+        return flags
+    
+    def get_video_flags(self, video_risk_data: Optional[Dict]) -> list:
+        """Identify concerning video-based indicators."""
+        flags = []
+        if not video_risk_data or video_risk_data.get('risk_score') is None:
+            return flags
+        
+        severity = video_risk_data.get('severity', '')
+        region_labels = video_risk_data.get('region_labels', {})
+        region_scores = video_risk_data.get('region_scores', {})
+        
+        if severity in ('Severe', 'Moderate Severe'):
+            flags.append(f"Facial asymmetry detected: {severity}")
+        
+        for region, label in region_labels.items():
+            score = region_scores.get(region, 0)
+            if label in ('Severe', 'Moderate Severe'):
+                flags.append(f"{region} region: {label} asymmetry (risk={score:.2f})")
         
         return flags
 
