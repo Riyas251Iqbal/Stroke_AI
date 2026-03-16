@@ -16,8 +16,9 @@ from utils.db import (
     get_user_by_id,
     log_audit
 )
-from utils.audio_features import AudioFeatureExtractor
+from utils.audio_features import AudioFeatureExtractor, extract_features_for_model
 from utils.risk_scoring import StrokeRiskScorer
+from utils.video_features import VideoFeatureExtractor
 from utils.triage_logic import TriageDecisionEngine
 from utils.helpers import (
     calculate_age,
@@ -39,6 +40,7 @@ class TriageService:
         self.audio_extractor = AudioFeatureExtractor()
         self.risk_scorer = StrokeRiskScorer()
         self.triage_engine = TriageDecisionEngine()
+        self.video_extractor = VideoFeatureExtractor()
         
         # Audio upload directory
         self.audio_dir = os.path.join(
@@ -47,6 +49,14 @@ class TriageService:
             'uploads'
         )
         os.makedirs(self.audio_dir, exist_ok=True)
+        
+        # Video upload directory
+        self.video_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            'video',
+            'uploads'
+        )
+        os.makedirs(self.video_dir, exist_ok=True)
     
     def submit_clinical_data(self, patient_id: int, 
                             clinical_data: Dict) -> Tuple[bool, str, Optional[int]]:
@@ -191,16 +201,19 @@ class TriageService:
             
             audio_file.save(audio_path)
             
-            # Extract audio features
+            # Extract legacy audio features (mfcc/prosody/timing)
             features = self.audio_extractor.extract_all_features(audio_path)
+            
+            # Extract 274-feature set for the new audio stroke model
+            model_features = extract_features_for_model(audio_path)
             
             # Insert audio record
             query = """
                 INSERT INTO audio_records (
                     patient_id, clinical_submission_id, audio_filename, audio_path,
                     duration_seconds, sample_rate, mfcc_features, prosody_features,
-                    timing_features, processing_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    timing_features, audio_model_features, processing_status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             params = (
@@ -213,6 +226,7 @@ class TriageService:
                 json.dumps(features['mfcc']),
                 json.dumps(features['prosody']),
                 json.dumps(features['timing']),
+                json.dumps(model_features) if model_features else None,
                 'processed'
             )
             
@@ -240,16 +254,98 @@ class TriageService:
             
             return False, f"Error processing audio: {str(e)}", None
     
+    def process_video_upload(self, patient_id: int, video_file,
+                            clinical_submission_id: Optional[int] = None) -> Tuple[bool, str, Optional[int]]:
+        """
+        Process uploaded facial video/image for video-based stroke detection.
+        
+        Args:
+            patient_id: Patient's user ID
+            video_file: Video or image file object (from Flask request.files)
+            clinical_submission_id: Associated clinical submission ID
+        
+        Returns:
+            Tuple of (success, message, video_record_id)
+        """
+        patient = get_user_by_id(patient_id)
+        if not patient:
+            return False, "Patient not found", None
+        
+        if not video_file:
+            return False, "No video/image file provided", None
+        
+        allowed_extensions = ['jpg', 'jpeg', 'png', 'bmp', 'webp', 'mp4', 'webm', 'avi', 'mov', 'ogg', 'mkv']
+        filename = video_file.filename
+        file_ext = filename.rsplit('.', 1)[-1].lower()
+        
+        if file_ext not in allowed_extensions:
+            return False, f"Invalid file format. Allowed: {', '.join(allowed_extensions)}", None
+        
+        try:
+            # Save image file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            safe_filename = f"patient_{patient_id}_{timestamp}.{file_ext}"
+            video_path = os.path.join(self.video_dir, safe_filename)
+            video_file.save(video_path)
+            
+            # Run video prediction
+            prediction = self.video_extractor.predict(video_path)
+            
+            processing_status = 'processed' if prediction.get('risk_score') is not None else 'failed'
+            processing_notes = prediction.get('error', None)
+            
+            # Insert video record
+            query = """
+                INSERT INTO video_records (
+                    patient_id, clinical_submission_id, video_filename, video_path,
+                    risk_score, severity, region_scores, region_labels,
+                    region_confidences, confidence,
+                    processing_status, processing_notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            
+            params = (
+                patient_id,
+                clinical_submission_id,
+                safe_filename,
+                video_path,
+                prediction.get('risk_score'),
+                prediction.get('severity'),
+                json.dumps(prediction.get('region_scores', {})),
+                json.dumps(prediction.get('region_labels', {})),
+                json.dumps(prediction.get('region_confidences', {})),
+                prediction.get('confidence'),
+                processing_status,
+                processing_notes
+            )
+            
+            video_record_id = execute_insert(query, params)
+            
+            log_audit(
+                user_id=patient_id,
+                action='video_processed',
+                resource_type='video_record',
+                resource_id=video_record_id,
+                details=f"Severity: {prediction.get('severity', 'N/A')}, Risk: {prediction.get('risk_score', 'N/A')}"
+            )
+            
+            return True, "Video processed successfully", video_record_id
+        
+        except Exception as e:
+            return False, f"Error processing video: {str(e)}", None
+    
     def perform_triage_assessment(self, patient_id: int,
                                  clinical_submission_id: int,
-                                 audio_record_id: Optional[int] = None) -> Tuple[bool, str, Optional[Dict]]:
+                                 audio_record_id: Optional[int] = None,
+                                 video_record_id: Optional[int] = None) -> Tuple[bool, str, Optional[Dict]]:
         """
-        Perform complete triage assessment combining clinical and audio data.
+        Perform complete triage assessment combining clinical, audio, and video data.
         
         Args:
             patient_id: Patient's user ID
             clinical_submission_id: Clinical submission ID
             audio_record_id: Audio record ID (optional)
+            video_record_id: Video record ID (optional)
         
         Returns:
             Tuple of (success, message, triage_result)
@@ -279,6 +375,7 @@ class TriageService:
             
             # Get audio features if available
             audio_features = None
+            audio_model_features = None
             if audio_record_id:
                 audio_query = "SELECT * FROM audio_records WHERE id = ?"
                 audio_record = execute_query(audio_query, (audio_record_id,), fetch_one=True)
@@ -289,24 +386,50 @@ class TriageService:
                         'prosody': json.loads(audio_record['prosody_features']),
                         'timing': json.loads(audio_record['timing_features'])
                     }
+                    # Load 274-feature model features if available
+                    if audio_record.get('audio_model_features'):
+                        audio_model_features = json.loads(audio_record['audio_model_features'])
+                    
                     print(f"\n[DEBUG] Audio Features for Assessment:")
                     print(f"Speech Rate: {audio_features['timing'].get('speech_rate')}")
                     print(f"Pause Rate:  {audio_features['timing'].get('pause_rate')}")
                     print(f"Pitch Std:   {audio_features['prosody'].get('pitch_std')}")
+                    print(f"New Model Features: {'274 loaded' if audio_model_features else 'not available'}")
             
-            # ERROR 2 FIX: Compute risk score with assessment type tracking
-            # ERROR 3 FIX: Capture safety net trigger
+            # Get video results if available
+            video_risk_data = None
+            if video_record_id:
+                video_query = "SELECT * FROM video_records WHERE id = ?"
+                video_record = execute_query(video_query, (video_record_id,), fetch_one=True)
+                
+                if video_record and video_record.get('risk_score') is not None:
+                    video_risk_data = {
+                        'risk_score': video_record['risk_score'],
+                        'severity': video_record['severity'],
+                        'region_scores': json.loads(video_record['region_scores']) if video_record.get('region_scores') else {},
+                        'region_labels': json.loads(video_record['region_labels']) if video_record.get('region_labels') else {},
+                        'region_confidences': json.loads(video_record['region_confidences']) if video_record.get('region_confidences') else {},
+                        'confidence': video_record['confidence']
+                    }
+                    print(f"\n[DEBUG] Video Risk Data: severity={video_risk_data['severity']}, risk={video_risk_data['risk_score']}")
+            
+            # Compute risk score with all available modalities
             risk_score, confidence, assessment_type, safety_net_triggered = self.risk_scorer.compute_risk_score(
-                clinical_data, audio_features
+                clinical_data, audio_features, audio_model_features, video_risk_data
             )
             
-            # Get feature importance and flags
+            # Get feature importance and flags (including video)
             feature_importance = self.risk_scorer.get_feature_importance(
                 clinical_data, audio_features
             )
+            video_importance = self.risk_scorer.get_video_importance(video_risk_data)
+            feature_importance.update(video_importance)
+            
             clinical_flags = self.risk_scorer.get_clinical_flags(
                 clinical_data, audio_features
             )
+            video_flags = self.risk_scorer.get_video_flags(video_risk_data)
+            clinical_flags.extend(video_flags)
             
             # Generate triage decision
             triage_report = self.triage_engine.create_triage_report(
@@ -357,19 +480,21 @@ class TriageService:
             # Save triage result
             triage_query = """
                 INSERT INTO triage_results (
-                    patient_id, clinical_submission_id, audio_record_id,
+                    patient_id, clinical_submission_id, audio_record_id, video_record_id,
                     risk_score, triage_level, confidence_score,
                     feature_importance, clinical_flags, recommendation,
                     assessment_type, target_evaluation_time,
                     safety_net_triggered, safety_net_findings,
+                    video_severity, video_region_details,
                     review_status, requires_immediate_review
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
             
             triage_params = (
                 patient_id,
                 clinical_submission_id,
                 audio_record_id,
+                video_record_id,
                 triage_report['risk_score'],
                 triage_report['triage_level'],
                 triage_report['confidence_score'],
@@ -380,6 +505,8 @@ class TriageService:
                 target_eval_time.strftime('%Y-%m-%d %H:%M:%S') if target_eval_time else None,
                 safety_net_triggered,
                 safety_net_findings,
+                video_risk_data.get('severity') if video_risk_data else None,
+                json.dumps(video_risk_data) if video_risk_data else None,
                 'pending',  # Issue #10: Initial review status
                 requires_senior_review  # Issue #8
             )
@@ -441,7 +568,8 @@ class TriageService:
         query = """
             SELECT 
                 tr.id, tr.risk_score, tr.triage_level, tr.confidence_score,
-                tr.assessment_date, tr.recommendation,
+                tr.assessment_date, tr.recommendation, tr.assessment_type,
+                tr.video_severity, tr.video_record_id,
                 cs.age, cs.hypertension, cs.diabetes, cs.bmi,
                 ar.audio_filename
             FROM triage_results tr

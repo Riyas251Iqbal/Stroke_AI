@@ -4,10 +4,12 @@ API endpoints for clinical triage assessment workflow.
 Handles clinical data submission, audio upload, and triage evaluation.
 """
 
+import json
+
 from flask import Blueprint, request, jsonify
 from services.auth_service import token_required, role_required
 from services.triage_service import TriageService
-from utils.db import log_audit, execute_query
+from utils.db import log_audit, execute_query, get_user_by_id
 
 
 triage_bp = Blueprint('triage', __name__, url_prefix='/api/triage')
@@ -212,11 +214,25 @@ def complete_assessment(current_user):
             if not success:
                 return jsonify({'error': f'Audio processing failed: {message}'}), 400
         
+        # Process video/facial image if provided
+        video_record_id = None
+        if 'video_file' in request.files:
+            video_file = request.files['video_file']
+            success, message, video_record_id = triage_service.process_video_upload(
+                patient_id=patient_id,
+                video_file=video_file,
+                clinical_submission_id=submission_id
+            )
+            
+            if not success:
+                return jsonify({'error': f'Video processing failed: {message}'}), 400
+        
         # Perform triage assessment
         success, message, triage_result = triage_service.perform_triage_assessment(
             patient_id=patient_id,
             clinical_submission_id=submission_id,
-            audio_record_id=audio_record_id
+            audio_record_id=audio_record_id,
+            video_record_id=video_record_id
         )
         
         if success:
@@ -259,6 +275,109 @@ def complete_assessment(current_user):
     
     except Exception as e:
         return jsonify({'error': f'Complete assessment error: {str(e)}'}), 500
+
+
+@triage_bp.route('/upload-video', methods=['POST'])
+@token_required
+@role_required('patient', 'doctor', 'admin')
+def upload_video(current_user):
+    """
+    Upload a facial image for video-based stroke analysis.
+    
+    Form data:
+        video_file: Image file (jpg, jpeg, png, bmp, webp)
+        clinical_submission_id: int (optional)
+    """
+    try:
+        if 'video_file' not in request.files:
+            return jsonify({'error': 'No video/image file provided'}), 400
+        
+        video_file = request.files['video_file']
+        clinical_submission_id = request.form.get('clinical_submission_id')
+        if clinical_submission_id:
+            clinical_submission_id = int(clinical_submission_id)
+        
+        patient_id = current_user['id']
+        if current_user['role'] in ['doctor', 'admin'] and 'patient_id' in request.form:
+            patient_id = int(request.form['patient_id'])
+        
+        success, message, video_record_id = triage_service.process_video_upload(
+            patient_id=patient_id,
+            video_file=video_file,
+            clinical_submission_id=clinical_submission_id
+        )
+        
+        if success:
+            # Fetch and return the full video record for inline display
+            video_record = execute_query(
+                "SELECT risk_score, severity, region_scores, region_labels, "
+                "region_confidences, confidence FROM video_records WHERE id = ?",
+                (video_record_id,), fetch_one=True
+            )
+            
+            video_result = None
+            if video_record:
+                video_result = {
+                    'risk_score': video_record['risk_score'],
+                    'severity': video_record['severity'],
+                    'region_scores': json.loads(video_record['region_scores']) if video_record['region_scores'] else {},
+                    'region_labels': json.loads(video_record['region_labels']) if video_record['region_labels'] else {},
+                    'region_confidences': json.loads(video_record['region_confidences']) if video_record['region_confidences'] else {},
+                    'confidence': video_record['confidence'],
+                }
+            
+            # For standalone video assessments (no clinical form),
+            # auto-create a triage result so it appears in dashboard history
+            triage_result = None
+            if not clinical_submission_id:
+                try:
+                    from utils.helpers import calculate_age
+                    patient = get_user_by_id(patient_id)
+                    calc_age = 50
+                    if patient and patient.get('date_of_birth'):
+                        try:
+                            calc_age = calculate_age(patient['date_of_birth'])
+                        except Exception:
+                            pass
+                    
+                    # Create minimal clinical submission from patient profile
+                    minimal_clinical = {
+                        'gender': (patient or {}).get('gender', 'Male'),
+                        'smoking_status': 'never',
+                        'work_type': 'Private',
+                        'residence_type': 'Urban',
+                        'assessment_reason': 'routine_screening',
+                    }
+                    ok, msg, cs_id = triage_service.submit_clinical_data(patient_id, minimal_clinical)
+                    
+                    if ok and cs_id:
+                        # Link video record to this clinical submission
+                        execute_query(
+                            "UPDATE video_records SET clinical_submission_id = ? WHERE id = ?",
+                            (cs_id, video_record_id)
+                        )
+                        # Run triage assessment with video data
+                        t_ok, t_msg, t_result = triage_service.perform_triage_assessment(
+                            patient_id=patient_id,
+                            clinical_submission_id=cs_id,
+                            video_record_id=video_record_id
+                        )
+                        if t_ok:
+                            triage_result = t_result
+                except Exception as e:
+                    print(f"Warning: Could not auto-create triage for standalone video: {e}")
+            
+            return jsonify({
+                'message': message,
+                'video_record_id': video_record_id,
+                'video_result': video_result,
+                'triage_result': triage_result
+            }), 201
+        else:
+            return jsonify({'error': message}), 400
+    
+    except Exception as e:
+        return jsonify({'error': f'Video upload error: {str(e)}'}), 500
 
 
 @triage_bp.route('/history', methods=['GET'])
@@ -398,7 +517,6 @@ def get_pending_cases(current_user):
         
         # Parse JSON fields
         for case in cases:
-            import json
             case['clinical_flags'] = json.loads(case['clinical_flags'])
         
         return jsonify({
