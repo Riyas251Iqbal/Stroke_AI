@@ -12,6 +12,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import PatientDashboard from './pages/PatientDashboard';
 import Assessment from './pages/Assessment';
+import VideoAssessment from './pages/VideoAssessment';
 import TriageResult from './pages/TriageResult';
 import DoctorDashboard from './pages/DoctorDashboard';
 import DoctorReview from './pages/DoctorReview';
@@ -114,6 +115,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute allowedRoles={['patient']}>
             <Assessment />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/patient/video-assessment"
+        element={
+          <ProtectedRoute allowedRoles={['patient']}>
+            <VideoAssessment />
           </ProtectedRoute>
         }
       />
