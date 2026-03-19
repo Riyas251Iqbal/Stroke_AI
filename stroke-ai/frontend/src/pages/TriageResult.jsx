@@ -17,7 +17,9 @@ import {
     Mic,
     Phone,
     ChevronDown,
-    ChevronUp
+    ChevronUp,
+    Camera,
+    Eye
 } from 'lucide-react';
 
 function TriageBadge({ level }) {
@@ -304,6 +306,84 @@ export default function TriageResult() {
                         </div>
                         <p className="text-xs text-muted mt-3 italic">
                             💡 Speech analysis detected no major prosodic inconsistencies often associated with dysarthria in early stroke.
+                        </p>
+                    </div>
+                )}
+
+                {/* Facial Analysis Section */}
+                {result.video_severity && (
+                    <div className="glass-card-static mb-6 slide-up" style={{ animationDelay: '75ms' }}>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="font-semibold mb-0 flex items-center gap-2">
+                                <Camera size={18} style={{ color: '#8b5cf6' }} />
+                                Facial Analysis
+                            </h3>
+                            <span className={`text-xs px-2 py-1 rounded-full font-bold ${result.video_severity === 'Severe' ? 'bg-red-500/12 text-red-400'
+                                    : result.video_severity === 'Moderate' ? 'bg-yellow-500/12 text-yellow-400'
+                                        : 'bg-green-500/12 text-green-400'
+                                }`}>
+                                {result.video_severity?.toUpperCase()}
+                            </span>
+                        </div>
+
+                        {(() => {
+                            let videoData = null;
+                            try {
+                                videoData = typeof result.video_region_details === 'string'
+                                    ? JSON.parse(result.video_region_details)
+                                    : result.video_region_details;
+                            } catch { videoData = null; }
+
+                            return videoData ? (
+                                <div className="space-y-4">
+                                    {/* Per-region results */}
+                                    {videoData.region_scores && Object.entries(videoData.region_scores).map(([region, score]) => {
+                                        const label = videoData.region_labels?.[region] || 'Unknown';
+                                        const barColor = score > 0.6 ? '#ef4444' : score > 0.3 ? '#f59e0b' : '#10b981';
+                                        return (
+                                            <div key={region} className="p-3 rounded-lg" style={{ background: 'rgba(99,102,241,0.05)' }}>
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <Eye size={14} style={{ color: '#8b5cf6' }} />
+                                                        <span className="text-sm font-medium">{region}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs px-2 py-0.5 rounded-full font-bold" style={{
+                                                            background: `${barColor}18`,
+                                                            color: barColor
+                                                        }}>
+                                                            {label}
+                                                        </span>
+                                                        <span className="text-sm font-semibold">{(score * 100).toFixed(0)}%</span>
+                                                    </div>
+                                                </div>
+                                                <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(99,102,241,0.10)' }}>
+                                                    <div
+                                                        className="h-full rounded-full transition-all duration-1000"
+                                                        style={{ width: `${score * 100}%`, background: barColor }}
+                                                    />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+
+                                    {/* Overall video risk */}
+                                    {videoData.risk_score != null && (
+                                        <div className="p-4 rounded-lg text-center" style={{ background: 'rgba(139, 92, 246, 0.06)', border: '1px solid rgba(139, 92, 246, 0.15)' }}>
+                                            <p className="text-sm text-secondary mb-1">Overall Facial Risk Score</p>
+                                            <p className="text-2xl font-bold" style={{ color: '#8b5cf6' }}>
+                                                {(videoData.risk_score * 100).toFixed(0)}%
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-secondary">Facial asymmetry analysis complete — severity: {result.video_severity}</p>
+                            );
+                        })()}
+
+                        <p className="text-xs text-muted mt-3 italic">
+                            📸 Facial analysis examined eye, eyebrow, and mouth regions for asymmetry patterns associated with stroke.
                         </p>
                     </div>
                 )}
