@@ -73,11 +73,17 @@ export const triageAPI = {
             headers: { 'Content-Type': 'multipart/form-data' },
         }),
 
+    // Upload facial image for video analysis
+    uploadVideo: (formData) =>
+        api.post('/triage/upload-video', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+        }),
+
     // Perform triage assessment
     assess: (data) =>
         api.post('/triage/assess', data),
 
-    // Complete assessment (clinical + audio + result)
+    // Complete assessment (clinical + audio + video + result)
     completeAssessment: (formData) =>
         api.post('/triage/complete-assessment', formData, {
             headers: { 'Content-Type': 'multipart/form-data' },

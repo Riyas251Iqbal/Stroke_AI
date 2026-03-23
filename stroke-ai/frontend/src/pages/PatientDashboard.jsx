@@ -20,7 +20,9 @@ import {
     Trash2,
     Calendar,
     BarChart3,
-    Shield
+    Shield,
+    Camera,
+    Layers
 } from 'lucide-react';
 import {
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -274,7 +276,7 @@ export default function PatientDashboard() {
                     </div>
                     <h2>Quick Actions</h2>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                     <Link to="/patient/assessment" className="glass-card flex items-center gap-6 slide-up" style={{
                         animationDelay: '300ms',
                         transition: 'all 0.3s cubic-bezier(.4,0,.2,1)'
@@ -304,6 +306,38 @@ export default function PatientDashboard() {
                         <div>
                             <h3 className="text-xl font-semibold mb-1">Voice Triage</h3>
                             <p className="text-secondary text-sm">Upload speech sample for early neuro-warning analysis.</p>
+                        </div>
+                    </Link>
+
+                    <Link to="/patient/video-assessment" className="glass-card flex items-center gap-6 slide-up" style={{
+                        animationDelay: '400ms',
+                        transition: 'all 0.3s cubic-bezier(.4,0,.2,1)'
+                    }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 0 30px rgba(139,92,246,0.15)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
+                    >
+                        <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ background: 'rgba(139, 92, 246, 0.12)', border: '1px solid rgba(139, 92, 246, 0.2)' }}>
+                            <Camera size={32} style={{ color: '#8b5cf6' }} />
+                        </div>
+                        <div>
+                            <h3 className="text-xl font-semibold mb-1">Video Triage</h3>
+                            <p className="text-secondary text-sm">Facial video analysis for stroke asymmetry detection.</p>
+                        </div>
+                    </Link>
+
+                    <Link to="/patient/assessment" className="glass-card flex items-center gap-6 slide-up" style={{
+                        animationDelay: '450ms',
+                        transition: 'all 0.3s cubic-bezier(.4,0,.2,1)'
+                    }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 0 30px rgba(245,158,11,0.15)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
+                    >
+                        <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+                            <Layers size={32} style={{ color: '#f59e0b' }} />
+                        </div>
+                        <div>
+                            <h3 className="text-xl font-semibold mb-1">Full Assessment</h3>
+                            <p className="text-secondary text-sm">Combined clinical, voice & video analysis.</p>
                         </div>
                     </Link>
                 </div>
@@ -469,12 +503,23 @@ export default function PatientDashboard() {
                                     style={{ background: 'rgba(99,102,241,0.05)' }}
                                 >
                                     <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'rgba(59, 130, 246, 0.12)' }}>
-                                            <Activity size={20} style={{ color: '#3b82f6' }} />
+                                        <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: item.assessment_type === 'clinical_video' ? 'rgba(139, 92, 246, 0.12)' : item.assessment_type === 'clinical_audio' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(59, 130, 246, 0.12)' }}>
+                                            {item.assessment_type === 'clinical_video' ? (
+                                                <Camera size={20} style={{ color: '#8b5cf6' }} />
+                                            ) : item.assessment_type === 'clinical_audio' ? (
+                                                <Mic size={20} style={{ color: '#10b981' }} />
+                                            ) : (
+                                                <Activity size={20} style={{ color: '#3b82f6' }} />
+                                            )}
                                         </div>
                                         <div>
-                                            <p className="font-medium">Triage Assessment</p>
+                                            <p className="font-medium">
+                                                {item.assessment_type === 'clinical_video' ? 'Video Triage' : item.assessment_type === 'clinical_audio' ? 'Voice Triage' : item.assessment_type === 'full' ? 'Full Assessment' : 'Clinical Assessment'}
+                                            </p>
                                             <p className="text-sm text-muted">{formatDate(item.assessment_date)}</p>
+                                            {item.video_severity && (
+                                                <p className="text-xs mt-0.5" style={{ color: '#8b5cf6' }}>Facial: {item.video_severity}</p>
+                                            )}
                                         </div>
                                     </div>
                                     <div className="flex items-center gap-4">
