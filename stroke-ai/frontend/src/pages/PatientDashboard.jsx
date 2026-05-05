@@ -22,7 +22,9 @@ import {
     BarChart3,
     Shield,
     Camera,
-    Layers
+    Layers,
+    CheckCircle,
+    FileText
 } from 'lucide-react';
 import {
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -496,41 +498,69 @@ export default function PatientDashboard() {
                     ) : (
                         <div className="space-y-4">
                             {(showAllHistory ? history : history.slice(0, 5)).map((item) => (
-                                <Link
-                                    key={item.id}
-                                    to={`/patient/result/${item.id}`}
-                                    className="flex items-center justify-between p-4 rounded-lg transition-colors"
-                                    style={{ background: 'rgba(99,102,241,0.05)' }}
-                                >
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: item.assessment_type === 'clinical_video' ? 'rgba(139, 92, 246, 0.12)' : item.assessment_type === 'clinical_audio' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(59, 130, 246, 0.12)' }}>
-                                            {item.assessment_type === 'clinical_video' ? (
-                                                <Camera size={20} style={{ color: '#8b5cf6' }} />
-                                            ) : item.assessment_type === 'clinical_audio' ? (
-                                                <Mic size={20} style={{ color: '#10b981' }} />
-                                            ) : (
-                                                <Activity size={20} style={{ color: '#3b82f6' }} />
+                                <div key={item.id}>
+                                    <Link
+                                        to={`/patient/result/${item.id}`}
+                                        className="flex items-center justify-between p-4 rounded-lg transition-colors"
+                                        style={{ background: 'rgba(99,102,241,0.05)' }}
+                                    >
+                                        <div className="flex items-center gap-4">
+                                            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: item.assessment_type === 'clinical_video' ? 'rgba(139, 92, 246, 0.12)' : item.assessment_type === 'clinical_audio' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(59, 130, 246, 0.12)' }}>
+                                                {item.assessment_type === 'clinical_video' ? (
+                                                    <Camera size={20} style={{ color: '#8b5cf6' }} />
+                                                ) : item.assessment_type === 'clinical_audio' ? (
+                                                    <Mic size={20} style={{ color: '#10b981' }} />
+                                                ) : (
+                                                    <Activity size={20} style={{ color: '#3b82f6' }} />
+                                                )}
+                                            </div>
+                                            <div>
+                                                <p className="font-medium">
+                                                    {item.assessment_type === 'clinical_video' ? 'Video Triage' : item.assessment_type === 'clinical_audio' ? 'Voice Triage' : item.assessment_type === 'full' ? 'Full Assessment' : 'Clinical Assessment'}
+                                                </p>
+                                                <p className="text-sm text-muted">{formatDate(item.assessment_date)}</p>
+                                                {item.video_severity && (
+                                                    <p className="text-xs mt-0.5" style={{ color: '#8b5cf6' }}>Facial: {item.video_severity}</p>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                            <div className="text-right">
+                                                <p className="text-sm text-secondary">Risk Score</p>
+                                                <p className="font-semibold">{(item.risk_score * 100).toFixed(0)}%</p>
+                                            </div>
+                                            <TriageBadge level={item.triage_level} />
+                                            {item.review_status === 'reviewed' && (
+                                                <span className="px-2 py-1 rounded-full text-xs font-semibold" style={{ background: 'rgba(16,185,129,0.12)', color: '#10b981' }}>
+                                                    ✓ Reviewed
+                                                </span>
                                             )}
+                                            <ChevronRight size={20} className="text-muted" />
                                         </div>
-                                        <div>
-                                            <p className="font-medium">
-                                                {item.assessment_type === 'clinical_video' ? 'Video Triage' : item.assessment_type === 'clinical_audio' ? 'Voice Triage' : item.assessment_type === 'full' ? 'Full Assessment' : 'Clinical Assessment'}
-                                            </p>
-                                            <p className="text-sm text-muted">{formatDate(item.assessment_date)}</p>
-                                            {item.video_severity && (
-                                                <p className="text-xs mt-0.5" style={{ color: '#8b5cf6' }}>Facial: {item.video_severity}</p>
-                                            )}
+                                    </Link>
+                                    {item.review_status === 'reviewed' && item.doctor_note && (
+                                        <div style={{
+                                            marginTop: '-0.25rem', marginLeft: '3.5rem',
+                                            padding: '0.75rem 1rem', borderRadius: '0 0 10px 10px',
+                                            background: 'rgba(16, 185, 129, 0.04)',
+                                            border: '1px solid rgba(16, 185, 129, 0.10)',
+                                            borderTop: 'none'
+                                        }}>
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <FileText size={13} style={{ color: '#10b981' }} />
+                                                <span className="text-xs font-semibold" style={{ color: '#10b981' }}>
+                                                    Dr. {item.doctor_name}'s Review
+                                                </span>
+                                                {item.doctor_note_type && item.doctor_note_type !== 'review' && (
+                                                    <span className="px-1.5 py-0.5 rounded text-xs" style={{ background: 'rgba(59,130,246,0.10)', color: '#60a5fa' }}>
+                                                        {item.doctor_note_type}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="text-sm text-secondary" style={{ margin: 0 }}>{item.doctor_note}</p>
                                         </div>
-                                    </div>
-                                    <div className="flex items-center gap-4">
-                                        <div className="text-right">
-                                            <p className="text-sm text-secondary">Risk Score</p>
-                                            <p className="font-semibold">{(item.risk_score * 100).toFixed(0)}%</p>
-                                        </div>
-                                        <TriageBadge level={item.triage_level} />
-                                        <ChevronRight size={20} className="text-muted" />
-                                    </div>
-                                </Link>
+                                    )}
+                                </div>
                             ))}
                         </div>
                     )}

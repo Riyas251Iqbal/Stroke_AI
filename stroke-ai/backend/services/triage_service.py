@@ -204,8 +204,9 @@ class TriageService:
             # Extract legacy audio features (mfcc/prosody/timing)
             features = self.audio_extractor.extract_all_features(audio_path)
             
-            # Extract 274-feature set for the new audio stroke model
-            model_features = extract_features_for_model(audio_path)
+            # We no longer extract the heavy Keras 1D/2D features here to save SQLite DB space.
+            # Instead, the audio path is passed to risk_scoring.py to extract and predict on the fly.
+            model_features = None
             
             # Insert audio record
             query = """
@@ -226,7 +227,7 @@ class TriageService:
                 json.dumps(features['mfcc']),
                 json.dumps(features['prosody']),
                 json.dumps(features['timing']),
-                json.dumps(model_features) if model_features else None,
+                None,  # We leave audio_model_features null
                 'processed'
             )
             
@@ -386,15 +387,15 @@ class TriageService:
                         'prosody': json.loads(audio_record['prosody_features']),
                         'timing': json.loads(audio_record['timing_features'])
                     }
-                    # Load 274-feature model features if available
-                    if audio_record.get('audio_model_features'):
-                        audio_model_features = json.loads(audio_record['audio_model_features'])
+                    # Pass the audio path for on-the-fly DL Keras processing
+                    if audio_record.get('audio_path'):
+                        audio_model_features = audio_record['audio_path']
                     
                     print(f"\n[DEBUG] Audio Features for Assessment:")
                     print(f"Speech Rate: {audio_features['timing'].get('speech_rate')}")
                     print(f"Pause Rate:  {audio_features['timing'].get('pause_rate')}")
                     print(f"Pitch Std:   {audio_features['prosody'].get('pitch_std')}")
-                    print(f"New Model Features: {'274 loaded' if audio_model_features else 'not available'}")
+                    print(f"DL evaluation path: {audio_model_features}")
             
             # Get video results if available
             video_risk_data = None
@@ -472,10 +473,14 @@ class TriageService:
                 # Extract audio-specific flags for findings
                 audio_flags = [f for f in clinical_flags if "speech" in f.lower() or "slurred" in f.lower()]
                 safety_net_findings = "; ".join(audio_flags) if audio_flags else "Critical audio anomalies detected"
-                # Ensure triage level is Emergency if safety net triggered
-                if triage_report['triage_level'] != 'Emergency':
+                # Only escalate to Emergency for truly critical risk scores (>= 0.85)
+                # For moderate safety-net cases, escalate to Urgent instead
+                if risk_score >= 0.85 and triage_report['triage_level'] != 'Emergency':
                     triage_report['triage_level'] = 'Emergency'
                     triage_report['recommendation'] = 'Immediate medical attention required (Safety Net Triggered)'
+                elif risk_score >= 0.60 and triage_report['triage_level'] not in ('Emergency', 'Urgent'):
+                    triage_report['triage_level'] = 'Urgent'
+                    triage_report['recommendation'] = 'Prompt medical evaluation recommended (Safety Net Triggered)'
 
             # Save triage result
             triage_query = """
@@ -570,11 +575,19 @@ class TriageService:
                 tr.id, tr.risk_score, tr.triage_level, tr.confidence_score,
                 tr.assessment_date, tr.recommendation, tr.assessment_type,
                 tr.video_severity, tr.video_record_id,
+                tr.review_status, tr.reviewed_by_doctor, tr.review_date,
                 cs.age, cs.hypertension, cs.diabetes, cs.bmi,
-                ar.audio_filename
+                ar.audio_filename,
+                doc.full_name as doctor_name,
+                dn.note_content as doctor_note,
+                dn.note_type as doctor_note_type,
+                dn.created_at as doctor_note_date
             FROM triage_results tr
             JOIN clinical_submissions cs ON tr.clinical_submission_id = cs.id
             LEFT JOIN audio_records ar ON tr.audio_record_id = ar.id
+            LEFT JOIN users doc ON tr.reviewed_by_doctor = doc.id
+            LEFT JOIN doctor_notes dn ON dn.triage_result_id = tr.id
+                AND dn.id = (SELECT MAX(dn2.id) FROM doctor_notes dn2 WHERE dn2.triage_result_id = tr.id)
             WHERE tr.patient_id = ?
             ORDER BY tr.assessment_date DESC
             LIMIT ?
@@ -599,11 +612,14 @@ class TriageService:
                 cs.diabetes, cs.bmi, cs.avg_glucose_level, cs.smoking_status,
                 cs.imputed_fields,
                 ar.audio_filename, ar.duration_seconds,
+                vr.risk_score as video_risk_score, vr.severity as video_detail_severity,
+                vr.region_scores as video_region_scores, vr.upload_date as video_upload_date,
                 u.full_name as patient_name, u.email as patient_email, u.address as patient_address
             FROM triage_results tr
             JOIN clinical_submissions cs ON tr.clinical_submission_id = cs.id
             JOIN users u ON tr.patient_id = u.id
             LEFT JOIN audio_records ar ON tr.audio_record_id = ar.id
+            LEFT JOIN video_records vr ON tr.video_record_id = vr.id
             WHERE tr.id = ?
         """
         
@@ -615,6 +631,16 @@ class TriageService:
             result['clinical_flags'] = json.loads(result['clinical_flags'])
             if result.get('imputed_fields'):
                 result['imputed_fields'] = json.loads(result['imputed_fields'])
+            if result.get('video_region_details'):
+                try:
+                    result['video_region_details'] = json.loads(result['video_region_details'])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            if result.get('video_region_scores'):
+                try:
+                    result['video_region_scores'] = json.loads(result['video_region_scores'])
+                except (json.JSONDecodeError, TypeError):
+                    pass
         
         return result
     
@@ -673,7 +699,7 @@ class TriageService:
                            WHERE id = ?"""
                 params = (doctor_id, doctor_override, triage_result_id)
 
-            execute_query(query, params)
+            execute_update(query, params)
             
             # Add doctor note
             note_query = """

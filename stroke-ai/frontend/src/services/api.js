@@ -105,6 +105,10 @@ export const triageAPI = {
     addReview: (reviewData) =>
         api.post('/triage/review', reviewData),
 
+    // Get reviewed cases (doctor)
+    getReviewedCases: () =>
+        api.get('/triage/reviewed'),
+
     // Request account deletion
     requestDeletion: (reason) =>
         api.post('/triage/request-deletion', { reason }),
@@ -152,6 +156,14 @@ export const adminAPI = {
     updateHospital: (id, data) => api.put(`/admin/hospitals/${id}`, data),
     deleteHospital: (id) => api.delete(`/admin/hospitals/${id}`),
 
+    // Pending hospital requests
+    getPendingHospitals: (status = 'pending') =>
+        api.get('/admin/pending-hospitals', { params: { status } }),
+    approvePendingHospital: (id) =>
+        api.post(`/admin/pending-hospitals/${id}/approve`),
+    rejectPendingHospital: (id, note = '') =>
+        api.post(`/admin/pending-hospitals/${id}/reject`, { note }),
+
     // Deletion requests
     getDeletionRequests: (status = 'pending') =>
         api.get('/admin/deletion-requests', { params: { status } }),
@@ -177,6 +189,9 @@ export const hospitalAPI = {
 
     // Get nearby doctors by location
     getNearbyDoctors: (location) => api.get('/hospitals/nearby-doctors', { params: { location } }),
+
+    // Submit new hospital request (doctor registration)
+    submitRequest: (data) => api.post('/hospitals/request', data),
 };
 
 // =====================================================

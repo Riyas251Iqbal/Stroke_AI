@@ -25,6 +25,10 @@ import {
     Shield,
     TrendingUp,
     ChevronDown,
+    FileText,
+    ClipboardCheck,
+    Mic,
+    Camera,
 } from 'lucide-react';
 import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -63,9 +67,11 @@ export default function DoctorDashboard() {
     const [deletionStatus, setDeletionStatus] = useState(null);
     const [deleteLoading, setDeleteLoading] = useState(false);
     const [appointments, setAppointments] = useState([]);
+    const [reviewedCases, setReviewedCases] = useState([]);
+    const [showAllReviewed, setShowAllReviewed] = useState(false);
 
     useEffect(() => { fetchCases(); }, [filter]);
-    useEffect(() => { fetchDeletionStatus(); fetchAppointments(); }, []);
+    useEffect(() => { fetchDeletionStatus(); fetchAppointments(); fetchReviewedCases(); }, []);
 
     const fetchCases = async () => {
         try {
@@ -107,10 +113,20 @@ export default function DoctorDashboard() {
         }
     };
 
+    const fetchReviewedCases = async () => {
+        try {
+            const res = await triageAPI.getReviewedCases();
+            setReviewedCases(res.data.reviewed_cases || []);
+        } catch (e) {
+            console.error('Error fetching reviewed cases:', e);
+        }
+    };
+
     const handleRefresh = () => {
         setRefreshing(true);
         fetchCases();
         fetchAppointments();
+        fetchReviewedCases();
     };
 
     const fetchAppointments = async () => {
@@ -616,6 +632,26 @@ export default function DoctorDashboard() {
                                                             <div style={{ flex: 1, minWidth: 0 }}>
                                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: 3 }}>
                                                                     <TriageBadge level={caseItem.triage_level} />
+                                                                    {/* Assessment type badges */}
+                                                                    {caseItem.assessment_type && (
+                                                                        <span style={{
+                                                                            padding: '1px 6px', borderRadius: 4,
+                                                                            fontSize: '0.5625rem', fontWeight: 700,
+                                                                            background: caseItem.assessment_type === 'clinical_video' ? 'rgba(139,92,246,0.12)'
+                                                                                : caseItem.assessment_type === 'clinical_audio' ? 'rgba(16,185,129,0.12)'
+                                                                                    : caseItem.assessment_type === 'full' ? 'rgba(245,158,11,0.12)'
+                                                                                        : 'rgba(59,130,246,0.12)',
+                                                                            color: caseItem.assessment_type === 'clinical_video' ? '#8b5cf6'
+                                                                                : caseItem.assessment_type === 'clinical_audio' ? '#10b981'
+                                                                                    : caseItem.assessment_type === 'full' ? '#f59e0b'
+                                                                                        : '#3b82f6',
+                                                                        }}>
+                                                                            {caseItem.assessment_type === 'clinical_video' ? '📹 VIDEO'
+                                                                                : caseItem.assessment_type === 'clinical_audio' ? '🎤 VOICE'
+                                                                                    : caseItem.assessment_type === 'full' ? '🔬 FULL'
+                                                                                        : '📋 CLINICAL'}
+                                                                        </span>
+                                                                    )}
                                                                     <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                                                                         <Calendar size={11} /> {formatDate(caseItem.assessment_date)}
                                                                     </span>
@@ -623,13 +659,22 @@ export default function DoctorDashboard() {
                                                                         {(caseItem.risk_score * 100).toFixed(0)}% risk
                                                                     </span>
                                                                 </div>
-                                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                                                                     {[
                                                                         caseItem.hypertension && 'Hypertension',
                                                                         caseItem.diabetes && 'Diabetes',
                                                                         caseItem.heart_disease && 'Heart Disease',
-                                                                        caseItem.audio_filename && 'Voice Anomalies'
-                                                                    ].filter(Boolean).join(' · ') || 'No risk factors'}
+                                                                    ].filter(Boolean).join(' · ') || 'No clinical risk factors'}
+                                                                    {caseItem.audio_filename && (
+                                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#10b981' }}>
+                                                                            <Mic size={11} /> Voice Data
+                                                                        </span>
+                                                                    )}
+                                                                    {caseItem.video_severity && (
+                                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, color: '#8b5cf6' }}>
+                                                                            <Camera size={11} /> Facial: {caseItem.video_severity}
+                                                                        </span>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                             <Link
@@ -744,6 +789,150 @@ export default function DoctorDashboard() {
                             </div>
                         )}
                     </div>
+                </div>
+
+                {/* ═══════════════════════ REVIEWED PATIENTS HISTORY ═══════════════════════ */}
+                <div style={{
+                    padding: '1.5rem',
+                    borderRadius: 16,
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                    marginBottom: '2rem',
+                }} className="slide-up">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+                            <div style={{
+                                width: 32, height: 32, borderRadius: 8,
+                                background: 'rgba(16, 185, 129, 0.12)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>
+                                <ClipboardCheck size={16} style={{ color: '#10b981' }} />
+                            </div>
+                            <h2 style={{ fontSize: '1.0625rem', fontWeight: 700, margin: 0 }}>Reviewed Patients</h2>
+                            <span style={{
+                                fontSize: '0.6875rem', fontWeight: 700,
+                                padding: '2px 8px', borderRadius: 20,
+                                background: 'rgba(16, 185, 129, 0.12)', color: '#10b981',
+                            }}>
+                                {reviewedCases.length}
+                            </span>
+                        </div>
+                        {reviewedCases.length > 5 && (
+                            <button
+                                onClick={() => setShowAllReviewed(!showAllReviewed)}
+                                style={{
+                                    background: 'none', border: 'none', cursor: 'pointer',
+                                    color: '#60a5fa', fontSize: '0.8125rem',
+                                    display: 'flex', alignItems: 'center', gap: '0.25rem',
+                                }}
+                            >
+                                {showAllReviewed ? 'Show less' : 'View all'} <ChevronRight size={14} />
+                            </button>
+                        )}
+                    </div>
+
+                    {reviewedCases.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '2.5rem 0' }}>
+                            <ClipboardCheck size={36} style={{ color: 'rgba(16,185,129,0.25)', margin: '0 auto 0.75rem', display: 'block' }} />
+                            <p style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>No reviewed cases yet.</p>
+                        </div>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                            {(showAllReviewed ? reviewedCases : reviewedCases.slice(0, 5)).map(rc => (
+                                <div key={rc.id}>
+                                    <Link
+                                        to={`/doctor/review/${rc.id}`}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                            padding: '0.875rem 1rem', borderRadius: 12,
+                                            background: 'rgba(16, 185, 129, 0.03)',
+                                            border: '1px solid rgba(16, 185, 129, 0.08)',
+                                            textDecoration: 'none', color: 'inherit',
+                                            transition: 'background 0.15s',
+                                            gap: '0.75rem',
+                                        }}
+                                        onMouseEnter={e => e.currentTarget.style.background = 'rgba(16, 185, 129, 0.08)'}
+                                        onMouseLeave={e => e.currentTarget.style.background = 'rgba(16, 185, 129, 0.03)'}
+                                    >
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
+                                            <div style={{
+                                                width: 38, height: 38, borderRadius: '50%',
+                                                background: 'linear-gradient(135deg, #10b981, #059669)',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                fontSize: '0.875rem', fontWeight: 700, color: '#fff', flexShrink: 0,
+                                            }}>
+                                                {rc.patient_name?.charAt(0) || 'P'}
+                                            </div>
+                                            <div style={{ minWidth: 0 }}>
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                    <span style={{ fontWeight: 700, fontSize: '0.875rem' }}>{rc.patient_name}</span>
+                                                    <span style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>Age: {rc.age}</span>
+                                                    {rc.assessment_type && (
+                                                        <span style={{
+                                                            padding: '1px 5px', borderRadius: 4,
+                                                            fontSize: '0.5625rem', fontWeight: 700,
+                                                            background: rc.assessment_type === 'clinical_video' ? 'rgba(139,92,246,0.12)'
+                                                                : rc.assessment_type === 'clinical_audio' ? 'rgba(16,185,129,0.12)'
+                                                                    : rc.assessment_type === 'full' ? 'rgba(245,158,11,0.12)'
+                                                                        : 'rgba(59,130,246,0.12)',
+                                                            color: rc.assessment_type === 'clinical_video' ? '#8b5cf6'
+                                                                : rc.assessment_type === 'clinical_audio' ? '#10b981'
+                                                                    : rc.assessment_type === 'full' ? '#f59e0b'
+                                                                        : '#3b82f6',
+                                                        }}>
+                                                            {rc.assessment_type === 'clinical_video' ? '📹 VIDEO'
+                                                                : rc.assessment_type === 'clinical_audio' ? '🎤 VOICE'
+                                                                    : rc.assessment_type === 'full' ? '🔬 FULL'
+                                                                        : '📋 CLINICAL'}
+                                                        </span>
+                                                    )}
+                                                    {rc.audio_filename && (
+                                                        <span style={{ fontSize: '0.5625rem', display: 'inline-flex', alignItems: 'center', gap: 2, color: '#10b981' }}>
+                                                            <Mic size={9} /> Audio
+                                                        </span>
+                                                    )}
+                                                    {rc.video_severity && (
+                                                        <span style={{ fontSize: '0.5625rem', display: 'inline-flex', alignItems: 'center', gap: 2, color: '#8b5cf6' }}>
+                                                            <Camera size={9} /> {rc.video_severity}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                {rc.doctor_note && (
+                                                    <p style={{
+                                                        margin: '2px 0 0', fontSize: '0.75rem', color: 'var(--text-muted)',
+                                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                                        maxWidth: '400px',
+                                                    }}>
+                                                        <FileText size={11} style={{ verticalAlign: 'middle', marginRight: 4, color: '#10b981' }} />
+                                                        {rc.doctor_note}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexShrink: 0 }}>
+                                            <div style={{ textAlign: 'right' }}>
+                                                <p style={{ fontWeight: 600, fontSize: '0.75rem', margin: 0 }}>
+                                                    {rc.review_date ? new Date(rc.review_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+                                                </p>
+                                                <p style={{ fontSize: '0.625rem', color: 'var(--text-muted)', margin: 0 }}>
+                                                    {(rc.risk_score * 100).toFixed(0)}% risk
+                                                </p>
+                                            </div>
+                                            <TriageBadge level={rc.triage_level} />
+                                            {rc.doctor_override && (
+                                                <span style={{
+                                                    fontSize: '0.5625rem', fontWeight: 700,
+                                                    padding: '1px 5px', borderRadius: 4,
+                                                    background: 'rgba(139,92,246,0.12)', color: '#8b5cf6',
+                                                }}>OVERRIDE</span>
+                                            )}
+                                            <CheckCircle size={16} style={{ color: '#10b981' }} />
+                                        </div>
+                                    </Link>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </div>
 
                 {/* ═══════════════════════ ACCOUNT DELETION ═══════════════════════ */}

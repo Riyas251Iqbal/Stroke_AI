@@ -489,11 +489,17 @@ def get_pending_cases(current_user):
             SELECT 
                 tr.id, tr.risk_score, tr.triage_level, tr.confidence_score,
                 tr.assessment_date, tr.clinical_flags, tr.preferred_doctor_id,
+                tr.assessment_type, tr.video_severity, tr.video_region_details,
                 u.full_name as patient_name, u.email as patient_email,
-                cs.age, cs.hypertension, cs.diabetes, cs.heart_disease
+                cs.age, cs.hypertension, cs.diabetes, cs.heart_disease,
+                ar.audio_filename, ar.duration_seconds,
+                vr.risk_score as video_risk_score, vr.severity as video_detail_severity,
+                vr.region_scores as video_region_scores
             FROM triage_results tr
             JOIN users u ON tr.patient_id = u.id
             JOIN clinical_submissions cs ON tr.clinical_submission_id = cs.id
+            LEFT JOIN audio_records ar ON tr.audio_record_id = ar.id
+            LEFT JOIN video_records vr ON tr.video_record_id = vr.id
             WHERE tr.reviewed_by_doctor IS NULL
               AND u.preferred_doctor_id = ?
         """
@@ -526,6 +532,46 @@ def get_pending_cases(current_user):
     
     except Exception as e:
         return jsonify({'error': f'Error fetching pending cases: {str(e)}'}), 500
+
+
+@triage_bp.route('/reviewed', methods=['GET'])
+@token_required
+@role_required('doctor', 'admin')
+def get_reviewed_cases(current_user):
+    """
+    Get triage cases previously reviewed by this doctor.
+    """
+    try:
+        query = """
+            SELECT 
+                tr.id, tr.risk_score, tr.triage_level, tr.confidence_score,
+                tr.assessment_date, tr.review_date, tr.review_status,
+                tr.doctor_override, tr.original_triage_level,
+                tr.assessment_type, tr.video_severity,
+                u.full_name as patient_name, u.email as patient_email,
+                cs.age, cs.hypertension, cs.diabetes, cs.heart_disease,
+                ar.audio_filename,
+                dn.note_content as doctor_note, dn.note_type as doctor_note_type
+            FROM triage_results tr
+            JOIN users u ON tr.patient_id = u.id
+            JOIN clinical_submissions cs ON tr.clinical_submission_id = cs.id
+            LEFT JOIN audio_records ar ON tr.audio_record_id = ar.id
+            LEFT JOIN doctor_notes dn ON dn.triage_result_id = tr.id
+                AND dn.id = (SELECT MAX(dn2.id) FROM doctor_notes dn2 WHERE dn2.triage_result_id = tr.id)
+            WHERE tr.reviewed_by_doctor = ?
+            ORDER BY tr.review_date DESC
+            LIMIT 50
+        """
+        
+        cases = execute_query(query, (current_user['id'],))
+        
+        return jsonify({
+            'reviewed_cases': cases,
+            'count': len(cases)
+        }), 200
+    
+    except Exception as e:
+        return jsonify({'error': f'Error fetching reviewed cases: {str(e)}'}), 500
 
 
 @triage_bp.route('/request-deletion', methods=['POST'])

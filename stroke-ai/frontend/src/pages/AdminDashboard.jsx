@@ -57,6 +57,12 @@ export default function AdminDashboard() {
     const [editingHospital, setEditingHospital] = useState(null);
     const [hospitalForm, setHospitalForm] = useState({ name: '', location: '', address: '', phone: '' });
 
+    // Pending hospital requests state
+    const [pendingHospitals, setPendingHospitals] = useState([]);
+    const [pendingHospitalFilter, setPendingHospitalFilter] = useState('pending');
+    const [rejectHospitalNote, setRejectHospitalNote] = useState('');
+    const [rejectingHospitalId, setRejectingHospitalId] = useState(null);
+
     // Deletion requests state
     const [deletionRequests, setDeletionRequests] = useState([]);
     const [deletionFilter, setDeletionFilter] = useState('pending');
@@ -74,10 +80,11 @@ export default function AdminDashboard() {
             fetchAuditLogs();
         } else if (activeTab === 'hospitals') {
             fetchHospitals();
+            fetchPendingHospitals();
         } else if (activeTab === 'deletions') {
             fetchDeletionRequests();
         }
-    }, [activeTab, roleFilter, statusFilter, deletionFilter]);
+    }, [activeTab, roleFilter, statusFilter, deletionFilter, pendingHospitalFilter]);
 
     const fetchData = async () => {
         try {
@@ -132,6 +139,36 @@ export default function AdminDashboard() {
             fetchHospitals();
         } catch (err) {
             console.error('Failed to deactivate hospital:', err);
+        }
+    };
+
+    const fetchPendingHospitals = async () => {
+        try {
+            const res = await adminAPI.getPendingHospitals(pendingHospitalFilter);
+            setPendingHospitals(res.data.pending_hospitals || []);
+        } catch (err) {
+            console.error('Failed to fetch pending hospitals:', err);
+        }
+    };
+
+    const handleApprovePendingHospital = async (id) => {
+        try {
+            await adminAPI.approvePendingHospital(id);
+            fetchPendingHospitals();
+            fetchHospitals();
+        } catch (err) {
+            alert(err.response?.data?.error || 'Failed to approve hospital');
+        }
+    };
+
+    const handleRejectPendingHospital = async (id) => {
+        try {
+            await adminAPI.rejectPendingHospital(id, rejectHospitalNote);
+            setRejectingHospitalId(null);
+            setRejectHospitalNote('');
+            fetchPendingHospitals();
+        } catch (err) {
+            alert(err.response?.data?.error || 'Failed to reject hospital');
         }
     };
 
@@ -1008,6 +1045,123 @@ export default function AdminDashboard() {
                             {hospitals.length === 0 && (
                                 <div className="text-center py-8 text-muted">
                                     No hospitals added yet. Click "Add Hospital" to get started.
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Pending Hospital Requests Section */}
+                        <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="font-semibold flex items-center gap-2">
+                                    <Clock size={18} style={{ color: '#f59e0b' }} />
+                                    Pending Hospital Requests
+                                    {pendingHospitals.length > 0 && (
+                                        <span className="px-2 py-0.5 rounded-full text-xs font-bold" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b' }}>
+                                            {pendingHospitals.length}
+                                        </span>
+                                    )}
+                                </h3>
+                                <select
+                                    value={pendingHospitalFilter}
+                                    onChange={(e) => setPendingHospitalFilter(e.target.value)}
+                                    className="select"
+                                    style={{ width: 'auto', minWidth: '120px' }}
+                                >
+                                    <option value="pending">Pending</option>
+                                    <option value="approved">Approved</option>
+                                    <option value="rejected">Rejected</option>
+                                    <option value="all">All</option>
+                                </select>
+                            </div>
+
+                            {pendingHospitals.length > 0 ? (
+                                <div className="space-y-3">
+                                    {pendingHospitals.map((ph) => (
+                                        <div key={ph.id} className="p-4 rounded-lg" style={{
+                                            background: 'rgba(245, 158, 11, 0.04)',
+                                            border: '1px solid rgba(245, 158, 11, 0.12)'
+                                        }}>
+                                            <div className="flex items-start justify-between">
+                                                <div style={{ flex: 1 }}>
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <Building2 size={16} style={{ color: '#f59e0b' }} />
+                                                        <span className="font-semibold">{ph.name}</span>
+                                                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${ph.status === 'pending' ? '' : ph.status === 'approved' ? '' : ''
+                                                            }`} style={{
+                                                                background: ph.status === 'pending' ? 'rgba(245,158,11,0.12)' : ph.status === 'approved' ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
+                                                                color: ph.status === 'pending' ? '#f59e0b' : ph.status === 'approved' ? '#10b981' : '#ef4444'
+                                                            }}>
+                                                            {ph.status.charAt(0).toUpperCase() + ph.status.slice(1)}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-sm text-secondary mb-1">
+                                                        <MapPin size={13} style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+                                                        {ph.location}
+                                                        {ph.address && <span className="text-muted"> • {ph.address}</span>}
+                                                    </div>
+                                                    {ph.phone && <div className="text-sm text-muted">📞 {ph.phone}</div>}
+                                                    <div className="text-xs text-muted mt-1">
+                                                        Submitted by: <span className="text-secondary">{ph.submitted_by_name || 'Unknown'}</span>
+                                                        {ph.submitted_by_email && <span> ({ph.submitted_by_email})</span>}
+                                                        <span> • {formatDate(ph.created_at)}</span>
+                                                    </div>
+                                                    {ph.review_note && (
+                                                        <div className="text-xs mt-1" style={{ color: '#ef4444' }}>Note: {ph.review_note}</div>
+                                                    )}
+                                                </div>
+                                                {ph.status === 'pending' && (
+                                                    <div className="flex items-center gap-2" style={{ marginLeft: '1rem' }}>
+                                                        <button
+                                                            onClick={() => handleApprovePendingHospital(ph.id)}
+                                                            className="btn btn-sm"
+                                                            style={{ background: 'rgba(16, 185, 129, 0.12)', color: '#10b981' }}
+                                                        >
+                                                            <UserCheck size={14} />
+                                                            Approve
+                                                        </button>
+                                                        {rejectingHospitalId === ph.id ? (
+                                                            <div className="flex items-center gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    className="input"
+                                                                    placeholder="Rejection note..."
+                                                                    value={rejectHospitalNote}
+                                                                    onChange={(e) => setRejectHospitalNote(e.target.value)}
+                                                                    style={{ width: '160px', fontSize: '0.8rem', padding: '0.4rem 0.6rem' }}
+                                                                />
+                                                                <button
+                                                                    onClick={() => handleRejectPendingHospital(ph.id)}
+                                                                    className="btn btn-sm"
+                                                                    style={{ background: 'rgba(239, 68, 68, 0.12)', color: '#ef4444' }}
+                                                                >
+                                                                    Confirm
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => { setRejectingHospitalId(null); setRejectHospitalNote(''); }}
+                                                                    className="btn btn-sm btn-secondary"
+                                                                >
+                                                                    <X size={14} />
+                                                                </button>
+                                                            </div>
+                                                        ) : (
+                                                            <button
+                                                                onClick={() => setRejectingHospitalId(ph.id)}
+                                                                className="btn btn-sm"
+                                                                style={{ background: 'rgba(239, 68, 68, 0.12)', color: '#ef4444' }}
+                                                            >
+                                                                <UserX size={14} />
+                                                                Reject
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-center py-6 text-muted text-sm">
+                                    No {pendingHospitalFilter === 'all' ? '' : pendingHospitalFilter} hospital requests found.
                                 </div>
                             )}
                         </div>

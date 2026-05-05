@@ -32,6 +32,23 @@ CREATE TABLE IF NOT EXISTS hospitals (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Pending hospital requests (doctor registration "Others" option)
+CREATE TABLE IF NOT EXISTS pending_hospitals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    location TEXT NOT NULL,
+    address TEXT,
+    phone TEXT,
+    submitted_by INTEGER,
+    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'approved', 'rejected')),
+    reviewed_by INTEGER,
+    reviewed_at TIMESTAMP,
+    review_note TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (submitted_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
 -- Clinical submissions - Patient clinical data for triage assessment
 CREATE TABLE IF NOT EXISTS clinical_submissions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

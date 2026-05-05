@@ -1,0 +1,17 @@
+Starting...
+Testing audio path: E:\Main_Project\stroke-ai\stroke-ai\backend\audio\uploads\patient_19_20260326_213954.wav
+E:\Main_Project\stroke-ai\stroke-ai\backend\venv\lib\site-packages\sklearn\base.py:376: InconsistentVersionWarning: Trying to unpickle estimator LogisticRegression from version 1.6.1 when using version 1.4.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+  Error loading audio_model.pkl: No module named '_loss'
+E:\Main_Project\stroke-ai\stroke-ai\backend\venv\lib\site-packages\sklearn\base.py:376: InconsistentVersionWarning: Trying to unpickle estimator StandardScaler from version 1.6.1 when using version 1.4.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+  [OK] Deep Learning ONNX Models Loaded successfully
+  [OK] DL Audio Scaler loaded
+[OK] Models loaded successfully from E:\Main_Project\stroke-ai\stroke-ai\backend\models
+     Components: Clinical, Audio(CNN+BiLSTM), ClinicalScaler
+  DL Stroke Detector: 0.9999
+  DL Normal Classifier (inverted): 0.3785
+  DL Ensemble Risk: 0.7824
+Returned Final Ensembled Risk Score: 0.7824193477630615

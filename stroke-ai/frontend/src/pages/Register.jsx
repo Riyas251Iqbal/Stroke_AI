@@ -39,6 +39,10 @@ export default function Register() {
     const [success, setSuccess] = useState(false);
     const [hospitals, setHospitals] = useState([]);
     const [doctors, setDoctors] = useState([]);
+    const [showNewHospitalForm, setShowNewHospitalForm] = useState(false);
+    const [newHospital, setNewHospital] = useState({
+        name: '', location: '', address: '', phone: ''
+    });
 
     useEffect(() => {
         hospitalAPI.getAll().then(res => setHospitals(res.data.hospitals || [])).catch(() => { });
@@ -55,8 +59,19 @@ export default function Register() {
     }, [formData.hospital_id]);
 
     const handleChange = (e) => {
-        setFormData({ ...formData, [e.target.name]: e.target.value });
+        const { name, value } = e.target;
+        if (name === 'hospital_id' && value === 'others') {
+            setShowNewHospitalForm(true);
+            setFormData({ ...formData, hospital_id: '' });
+        } else {
+            if (name === 'hospital_id') setShowNewHospitalForm(false);
+            setFormData({ ...formData, [name]: value });
+        }
         setError('');
+    };
+
+    const handleNewHospitalChange = (e) => {
+        setNewHospital({ ...newHospital, [e.target.name]: e.target.value });
     };
 
     const handleSubmit = async (e) => {
@@ -74,6 +89,14 @@ export default function Register() {
         if (formData.role === 'patient' && !formData.address.trim()) {
             setError('Address is required for patient accounts (for emergency response)');
             return;
+        }
+
+        // Validate new hospital fields for doctor selecting "Others"
+        if (formData.role === 'doctor' && showNewHospitalForm) {
+            if (!newHospital.name.trim() || !newHospital.location.trim()) {
+                setError('Hospital name and location are required');
+                return;
+            }
         }
 
         setLoading(true);
@@ -97,7 +120,26 @@ export default function Register() {
             if (formData.role === 'patient' && formData.preferred_doctor_id) {
                 payload.preferred_doctor_id = parseInt(formData.preferred_doctor_id);
             }
-            await register(payload);
+
+            // Register the user first
+            const regRes = await register(payload);
+
+            // If doctor selected "Others", submit hospital request after registration
+            if (formData.role === 'doctor' && showNewHospitalForm) {
+                try {
+                    const userId = regRes?.user?.id || regRes?.id;
+                    await hospitalAPI.submitRequest({
+                        name: newHospital.name,
+                        location: newHospital.location,
+                        address: newHospital.address,
+                        phone: newHospital.phone,
+                        submitted_by: userId || null
+                    });
+                } catch (hospErr) {
+                    // Registration succeeded, hospital request failed — still navigate
+                    console.warn('Hospital request failed:', hospErr);
+                }
+            }
 
             setSuccess(true);
             setTimeout(() => {
@@ -118,6 +160,11 @@ export default function Register() {
                         <CheckCircle size={32} style={{ color: '#10b981' }} />
                     </div>
                     <h2 className="text-xl font-semibold mb-2">Account Created!</h2>
+                    {showNewHospitalForm && (
+                        <p className="text-sm mb-2" style={{ color: '#f59e0b' }}>
+                            📋 Your hospital request has been submitted and is pending admin approval.
+                        </p>
+                    )}
                     <p className="text-secondary">Redirecting to login...</p>
                 </div>
             </div>
@@ -329,13 +376,102 @@ export default function Register() {
                                         {h.name} — {h.location}
                                     </option>
                                 ))}
+                                {formData.role === 'doctor' && (
+                                    <option value="others">🏥 Others (Register New Hospital)</option>
+                                )}
                             </select>
-                            {hospitals.length === 0 && (
+                            {hospitals.length === 0 && !showNewHospitalForm && (
                                 <p className="text-xs text-muted mt-1">
                                     No hospitals available yet. Contact admin to add hospitals.
                                 </p>
                             )}
                         </div>
+
+                        {/* New Hospital Registration Form (Doctor only - when Others selected) */}
+                        {formData.role === 'doctor' && showNewHospitalForm && (
+                            <div style={{
+                                padding: '1rem',
+                                marginTop: '0.5rem',
+                                borderRadius: '0.75rem',
+                                border: '1px solid rgba(245, 158, 11, 0.25)',
+                                background: 'rgba(245, 158, 11, 0.06)'
+                            }}>
+                                <p className="text-sm font-medium mb-3" style={{ color: '#f59e0b' }}>
+                                    🏥 Register New Hospital
+                                </p>
+                                <p className="text-xs text-muted mb-3">
+                                    Your hospital will be added after admin approval.
+                                </p>
+                                <div className="form-grid">
+                                    <div className="input-group">
+                                        <label className="input-label" htmlFor="hospital_name">
+                                            Hospital Name *
+                                        </label>
+                                        <input
+                                            type="text"
+                                            id="hospital_name"
+                                            name="name"
+                                            className="input"
+                                            placeholder="Enter hospital name"
+                                            value={newHospital.name}
+                                            onChange={handleNewHospitalChange}
+                                            required
+                                        />
+                                    </div>
+                                    <div className="input-group">
+                                        <label className="input-label" htmlFor="hospital_location">
+                                            Location / City *
+                                        </label>
+                                        <input
+                                            type="text"
+                                            id="hospital_location"
+                                            name="location"
+                                            className="input"
+                                            placeholder="Enter city or area"
+                                            value={newHospital.location}
+                                            onChange={handleNewHospitalChange}
+                                            required
+                                        />
+                                    </div>
+                                </div>
+                                <div className="input-group" style={{ marginTop: '0.5rem' }}>
+                                    <label className="input-label" htmlFor="hospital_address">
+                                        Full Address
+                                    </label>
+                                    <input
+                                        type="text"
+                                        id="hospital_address"
+                                        name="address"
+                                        className="input"
+                                        placeholder="Enter full hospital address"
+                                        value={newHospital.address}
+                                        onChange={handleNewHospitalChange}
+                                    />
+                                </div>
+                                <div className="input-group" style={{ marginTop: '0.5rem' }}>
+                                    <label className="input-label" htmlFor="hospital_phone">
+                                        Phone Number
+                                    </label>
+                                    <input
+                                        type="tel"
+                                        id="hospital_phone"
+                                        name="phone"
+                                        className="input"
+                                        placeholder="Enter hospital phone number"
+                                        value={newHospital.phone}
+                                        onChange={handleNewHospitalChange}
+                                    />
+                                </div>
+                                <button
+                                    type="button"
+                                    className="text-xs mt-2"
+                                    style={{ color: '#60a5fa', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
+                                    onClick={() => { setShowNewHospitalForm(false); setNewHospital({ name: '', location: '', address: '', phone: '' }); }}
+                                >
+                                    ← Back to hospital list
+                                </button>
+                            </div>
+                        )}
 
                         {/* Doctor Selection - Patients only, after hospital is chosen */}
                         {formData.role === 'patient' && formData.hospital_id && (

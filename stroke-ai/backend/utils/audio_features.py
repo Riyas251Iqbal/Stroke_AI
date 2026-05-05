@@ -474,6 +474,241 @@ def extract_speech_features(audio_path: str) -> Dict[str, any]:
     return extractor.extract_all_features(audio_path)
 
 
+def extract_features_for_ensemble(audio_path: str,
+                                   sample_rate: int = 16000,
+                                   n_mfcc: int = 40,
+                                   hop_length: int = 512,
+                                   n_fft: int = 2048,
+                                   max_duration: float = 10.0) -> Optional[np.ndarray]:
+    """
+    Extract 137 features for the ensemble audio models (GB + RF + XGB).
+
+    Feature breakdown:
+      - 40 MFCC means + 40 delta MFCC means + 40 delta² MFCC means = 120
+      - Spectral: centroid, bandwidth, rolloff, flatness (means) = 4
+      - ZCR mean = 1
+      - Chroma mean = 1, Mel mean = 1
+      - F0: mean, std, range, voiced_fraction = 4
+      - RMS mean = 1
+      - Onset: rate, strength_mean, strength_std = 3
+      - Duration, silence_ratio = 2
+      Total = 137
+
+    Args:
+        audio_path: Path to the audio file
+        sample_rate: Target sample rate (must match training: 16000)
+        n_mfcc: Number of MFCC coefficients (must match training: 40)
+        hop_length: Hop length for STFT
+        n_fft: FFT window size
+        max_duration: Maximum audio duration in seconds
+
+    Returns:
+        Numpy array of shape (137,), or None on failure
+    """
+    try:
+        y, sr = librosa.load(audio_path, sr=sample_rate, mono=True,
+                             duration=max_duration)
+
+        if len(y) == 0:
+            return None
+
+        feats = []
+
+        # ── MFCC means + delta means + delta² means (120) ─────────
+        mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=n_mfcc,
+                                      hop_length=hop_length, n_fft=n_fft)
+        delta_mfccs = librosa.feature.delta(mfccs)
+        delta2_mfccs = librosa.feature.delta(mfccs, order=2)
+
+        for i in range(n_mfcc):
+            feats.append(float(np.mean(mfccs[i])))
+        for i in range(n_mfcc):
+            feats.append(float(np.mean(delta_mfccs[i])))
+        for i in range(n_mfcc):
+            feats.append(float(np.mean(delta2_mfccs[i])))
+
+        # ── Spectral features (4) ─────────────────────────────────
+        sc = librosa.feature.spectral_centroid(y=y, sr=sr,
+                                                hop_length=hop_length)[0]
+        sb = librosa.feature.spectral_bandwidth(y=y, sr=sr,
+                                                 hop_length=hop_length)[0]
+        sro = librosa.feature.spectral_rolloff(y=y, sr=sr,
+                                                hop_length=hop_length)[0]
+        sf = librosa.feature.spectral_flatness(y=y, hop_length=hop_length)[0]
+        feats += [float(np.mean(sc)), float(np.mean(sb)),
+                  float(np.mean(sro)), float(np.mean(sf))]
+
+        # ── ZCR mean (1) ──────────────────────────────────────────
+        zcr = librosa.feature.zero_crossing_rate(y, hop_length=hop_length)[0]
+        feats.append(float(np.mean(zcr)))
+
+        # ── Chroma mean (1) ───────────────────────────────────────
+        chroma = librosa.feature.chroma_stft(y=y, sr=sr,
+                                              hop_length=hop_length)
+        feats.append(float(np.mean(chroma)))
+
+        # ── Mel spectrogram mean (1) ──────────────────────────────
+        mel = librosa.feature.melspectrogram(y=y, sr=sr,
+                                              hop_length=hop_length)
+        feats.append(float(np.mean(mel)))
+
+        # ── F0 (fundamental frequency) (4) ────────────────────────
+        f0, voiced_flag, _ = librosa.pyin(y, fmin=65, fmax=600,
+                                           sr=sr, hop_length=hop_length)
+        f0_valid = f0[~np.isnan(f0)] if f0 is not None else np.array([0.0])
+        if len(f0_valid) == 0:
+            f0_valid = np.array([0.0])
+
+        feats += [float(np.mean(f0_valid)), float(np.std(f0_valid)),
+                  float(np.ptp(f0_valid))]
+        feats.append(
+            float(np.sum(voiced_flag) / len(voiced_flag))
+            if voiced_flag is not None and len(voiced_flag) > 0 else 0.0
+        )
+
+        # ── RMS energy mean (1) ───────────────────────────────────
+        rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
+        feats.append(float(np.mean(rms)))
+
+        # ── Onset features (3) ────────────────────────────────────
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr,
+                                                   hop_length=hop_length)
+        onsets = librosa.onset.onset_detect(y=y, sr=sr,
+                                              hop_length=hop_length)
+        duration_sec = float(len(y) / sr)
+        feats.append(
+            float(len(onsets) / duration_sec) if duration_sec > 0 else 0.0
+        )
+        feats.append(float(np.mean(onset_env)))
+        feats.append(float(np.std(onset_env)))
+
+        # ── Duration + silence ratio (2) ──────────────────────────
+        feats.append(duration_sec)
+
+        rms_threshold = np.mean(rms) * 0.3
+        silence_frames = np.sum(rms < rms_threshold)
+        feats.append(
+            float(silence_frames / len(rms)) if len(rms) > 0 else 0.0
+        )
+
+        # Replace any NaN / Inf
+        result = np.array(feats, dtype=np.float32)
+        result = np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0)
+
+        return result
+
+    except Exception as e:
+        print(f"[ERROR] Ensemble feature extraction failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+# ─────────────────────────────────────────────────────────
+# Keras Deep Learning Feature Extraction
+# ─────────────────────────────────────────────────────────
+
+def load_audio_keras(filepath: str, sr: int = 16000, duration: float = 3.0) -> Optional[np.ndarray]:
+    """Load and normalise an audio clip to a fixed length for Keras models."""
+    try:
+        y, _ = librosa.load(filepath, sr=sr, duration=duration, mono=True)
+        target_len = int(sr * duration)
+        if len(y) < target_len:
+            y = np.pad(y, (0, target_len - len(y)), mode='constant')
+        else:
+            y = y[:target_len]
+        # Peak normalise
+        if np.max(np.abs(y)) > 0:
+            y = y / np.max(np.abs(y))
+        return y
+    except Exception as e:
+        print(f"Error in load_audio_keras: {e}")
+        return None
+
+def extract_2d_features(y: np.ndarray, sr: int = 16000) -> np.ndarray:
+    """
+    Returns a (128 × 128 × 3) spectrogram stack for CNN.
+    """
+    N_MELS = 128
+    N_FFT = 2048
+    HOP_LENGTH = 512
+    N_MFCC = 40
+    
+    # Log-mel spectrogram
+    mel = librosa.feature.melspectrogram(
+        y=y, sr=sr, n_mels=N_MELS, n_fft=N_FFT, hop_length=HOP_LENGTH)
+    mel_db = librosa.power_to_db(mel, ref=np.max)
+
+    # MFCC (40 coefs → pad to 128 rows)
+    mfcc = librosa.feature.mfcc(
+        y=y, sr=sr, n_mfcc=N_MFCC, n_fft=N_FFT, hop_length=HOP_LENGTH)
+    mfcc_padded = np.pad(mfcc, ((0, N_MELS - N_MFCC), (0, 0)), mode='constant')
+
+    # Chroma STFT
+    chroma = librosa.feature.chroma_stft(
+        y=y, sr=sr, n_fft=N_FFT, hop_length=HOP_LENGTH)
+    chroma_padded = np.pad(chroma, ((0, N_MELS - 12), (0, 0)), mode='constant')
+
+    def _fix_width(m, target=128):
+        if m.shape[1] < target:
+            m = np.pad(m, ((0, 0), (0, target - m.shape[1])), mode='constant')
+        return m[:, :target]
+
+    mel_db      = _fix_width(mel_db)
+    mfcc_padded = _fix_width(mfcc_padded)
+    chroma_pad  = _fix_width(chroma_padded)
+
+    # Stack → (128, 128, 3)
+    stack = np.stack([mel_db, mfcc_padded, chroma_pad], axis=-1)
+    
+    # Min-max normalise each channel independently
+    for c in range(3):
+        mn, mx = stack[:, :, c].min(), stack[:, :, c].max()
+        if mx > mn:
+            stack[:, :, c] = (stack[:, :, c] - mn) / (mx - mn)
+            
+    return stack.astype(np.float32)
+
+def extract_1d_features(y: np.ndarray, sr: int = 16000, duration: float = 3.0) -> np.ndarray:
+    """
+    Returns a flat 256-dimensional feature vector.
+    """
+    N_MFCC = 40
+    feats = []
+
+    # MFCCs + delta + delta-delta (40 × 3 stats each = 120 means + 120 stds = 240)
+    mfcc   = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=N_MFCC)
+    d_mfcc = librosa.feature.delta(mfcc)
+    d2_mfcc= librosa.feature.delta(mfcc, order=2)
+    for m in [mfcc, d_mfcc, d2_mfcc]:
+        feats += [m.mean(axis=1), m.std(axis=1)]
+
+    # Spectral features (4 × 2 = 8)
+    sc  = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+    sb  = librosa.feature.spectral_bandwidth(y=y, sr=sr)[0]
+    sr_ = librosa.feature.spectral_rolloff(y=y, sr=sr)[0]
+    sf_ = librosa.feature.spectral_flatness(y=y)[0]
+    for s in [sc, sb, sr_, sf_]:
+        feats += [np.array([s.mean(), s.std()])]
+
+    # Prosody — F0 pitch (4)
+    # librosa.pyin is slow but matches user exact code
+    f0, _, _ = librosa.pyin(y, fmin=50, fmax=400, sr=sr)
+    f0 = f0[~np.isnan(f0)] if f0 is not None else np.array([0.0])
+    feats += [np.array([f0.mean() if len(f0) else 0,
+                        f0.std()  if len(f0) else 0,
+                        f0.max()  if len(f0) else 0,
+                        len(f0) / (sr * duration)])]
+
+    # ZCR & RMS energy (4)
+    zcr = librosa.feature.zero_crossing_rate(y)[0]
+    rms = librosa.feature.rms(y=y)[0]
+    feats += [np.array([zcr.mean(), zcr.std()]),
+              np.array([rms.mean(), rms.std()])]
+
+    return np.concatenate(feats).astype(np.float32)
+
+
 if __name__ == "__main__":
     # Example usage
     print("Audio Feature Extractor for Early Stroke Detection CDSS")

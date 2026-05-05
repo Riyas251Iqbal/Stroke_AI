@@ -12,3 +12,5 @@ torchvision
 timm
 Pillow
 opencv-python-headless
+onnxruntime
+xgboost

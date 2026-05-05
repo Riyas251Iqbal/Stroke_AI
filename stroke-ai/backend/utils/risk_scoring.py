@@ -11,6 +11,13 @@ Supports the tri-model architecture:
 """
 
 import numpy as np
+# IMPORTANT: onnxruntime MUST be imported before joblib/sklearn on Windows
+# to prevent DLL initialization conflicts (_pywrap_tensorflow / onnxruntime_pybind11_state)
+try:
+    import onnxruntime as ort
+    _ONNX_AVAILABLE = True
+except ImportError:
+    _ONNX_AVAILABLE = False
 import joblib
 import os
 import json
@@ -51,6 +58,12 @@ class StrokeRiskScorer:
         self.new_audio_scaler = None
         self.new_audio_imputer = None
         self.new_audio_feature_names = None
+        
+        # Ensemble audio models (GB + RF + XGB, 137 features)
+        self.ensemble_gb = None
+        self.ensemble_rf = None
+        self.ensemble_xgb = None
+        self.ensemble_scaler = None
         
         # Tri-model ensemble weights
         # When all 3 available: 50% clinical + 25% audio + 25% video
@@ -96,31 +109,75 @@ class StrokeRiskScorer:
             except Exception as e:
                 print(f"  Error loading {filename}: {e}")
         
-        # New audio stroke model (VotingClassifier, 274 features)
-        new_audio_files = {
-            'new_audio_model': 'audio_stroke_model.pkl',
-            'new_audio_scaler': 'audio_scaler.pkl',
-            'new_audio_imputer': 'audio_imputer.pkl',
+        # Load new ONNX models (imported at module level to avoid DLL conflicts)
+        if _ONNX_AVAILABLE:
+            try:
+                stroke_path = os.path.join(self.models_dir, 'model1_stroke_detector.onnx')
+                normal_path = os.path.join(self.models_dir, 'model2_normal_classifier.onnx')
+                
+                if os.path.exists(stroke_path) and os.path.exists(normal_path):
+                    self.stroke_detector = ort.InferenceSession(stroke_path)
+                    self.normal_classifier = ort.InferenceSession(normal_path)
+                    print("  [OK] Deep Learning ONNX Models Loaded successfully")
+                else:
+                    self.stroke_detector = None
+                    self.normal_classifier = None
+                    print("  [WARN] ONNX models not found in models directory")
+            except Exception as e:
+                self.stroke_detector = None
+                self.normal_classifier = None
+                print(f"  [ERROR] loading ONNX models: {e}")
+        else:
+            self.stroke_detector = None
+            self.normal_classifier = None
+            print("  [WARN] onnxruntime not available, DL models skipped")
+        
+        # Load ensemble audio models (GB + RF + XGB)
+        ensemble_files = {
+            'ensemble_gb': 'gb_model.pkl',
+            'ensemble_rf': 'rf_model.pkl',
+            'ensemble_xgb': 'xgb_model.pkl',
+            'ensemble_scaler': 'scaler.pkl'
         }
-        
-        for attr, filename in new_audio_files.items():
+        ensemble_loaded = 0
+        for attr, filename in ensemble_files.items():
             path = os.path.join(self.models_dir, filename)
-            if not os.path.exists(path):
-                print(f"  Warning: {filename} not found")
-                continue
-            try:
-                setattr(self, attr, joblib.load(path))
-            except Exception as e:
-                print(f"  Error loading {filename}: {e}")
+            if os.path.exists(path):
+                try:
+                    setattr(self, attr, joblib.load(path))
+                    ensemble_loaded += 1
+                except Exception as e:
+                    print(f"  [WARN] Could not load {filename}: {e}")
         
-        # Load new audio feature names
-        feat_names_path = os.path.join(self.models_dir, 'audio_feature_names.json')
-        if os.path.exists(feat_names_path):
+        if ensemble_loaded == 4:
+            print("  [OK] Ensemble Audio Models (GB + RF + XGB + Scaler) loaded")
+        elif ensemble_loaded > 0:
+            print(f"  [WARN] Partial ensemble load ({ensemble_loaded}/4)")
+        
+        # Load 1D feature scaler for the DL audio models
+        self.dl_audio_scaler = None
+        scaler_path = os.path.join(self.models_dir, 'new_audio_scaler.pkl')
+        if os.path.exists(scaler_path):
             try:
-                with open(feat_names_path, 'r') as f:
-                    self.new_audio_feature_names = json.load(f)
+                self.dl_audio_scaler = joblib.load(scaler_path)
+                print("  [OK] DL Audio Scaler loaded")
             except Exception as e:
-                print(f"  Error loading audio_feature_names.json: {e}")
+                print(f"  [WARN] Could not load DL audio scaler: {e}")
+            
+        # Try to read ensemble weights
+        metadata_path = os.path.join(self.models_dir, 'new_audio_model_metadata.json')
+        if os.path.exists(metadata_path):
+            try:
+                with open(metadata_path, 'r') as f:
+                    meta = json.load(f)
+                    w = meta.get('ensemble_weights', {})
+                    self.stroke_detector_weights = w.get('stroke', 0.65)
+                    self.normal_classifier_weights = w.get('normal', 0.35)
+            except Exception as e:
+                print(f"  [ERROR] reading DL metadata: {e}")
+        else:
+            self.stroke_detector_weights = 0.65
+            self.normal_classifier_weights = 0.35
         
         # Apply metadata configuration
         if self.metadata:
@@ -132,10 +189,9 @@ class StrokeRiskScorer:
         status = []
         if self.clinical_model: status.append('Clinical')
         if self.audio_model: status.append('Audio(legacy)')
-        if self.new_audio_model: status.append('Audio(new-274f)')
+        if self.ensemble_gb and self.ensemble_rf and self.ensemble_xgb: status.append('Audio(Ensemble GB+RF+XGB)')
+        if hasattr(self, 'stroke_detector') and self.stroke_detector: status.append('Audio(CNN+BiLSTM)')
         if self.clinical_scaler: status.append('ClinicalScaler')
-        if self.new_audio_scaler: status.append('AudioScaler(new)')
-        if self.new_audio_imputer: status.append('AudioImputer')
         print(f"[OK] Models loaded successfully from {self.models_dir}")
         print(f"     Components: {', '.join(status)}")
     
@@ -260,41 +316,105 @@ class StrokeRiskScorer:
         
         return np.array(feature_vector, dtype=float).reshape(1, -1)
     
-    def predict_new_audio_risk(self, audio_model_features: Optional[Dict]) -> Optional[float]:
+    def predict_ensemble_audio_risk(self, audio_path: Optional[str]) -> Optional[float]:
         """
-        Predict dysarthria risk using the new 274-feature audio stroke model.
-        
-        Args:
-            audio_model_features: Dict of 274 features from extract_features_for_model()
-            
-        Returns:
-            Probability of dysarthria (0.0 - 1.0), or None if unavailable
+        Predict dysarthria risk using the GB + RF + XGB ensemble (137 features).
+        Returns P(dysarthric) averaged across all three models.
         """
-        if not audio_model_features or not self.new_audio_model:
+        if not audio_path:
             return None
-        
-        if not self.new_audio_feature_names:
-            print("  Warning: audio_feature_names.json not loaded")
+        if not (self.ensemble_gb and self.ensemble_rf and self.ensemble_xgb and self.ensemble_scaler):
             return None
-        
+
         try:
-            # Build feature vector in the exact order the model expects
-            X = np.array([
-                [audio_model_features.get(f, 0.0) for f in self.new_audio_feature_names]
-            ], dtype=np.float32)
+            from utils.audio_features import extract_features_for_ensemble
+
+            features = extract_features_for_ensemble(audio_path)
+            if features is None:
+                return None
+
+            X = features.reshape(1, -1)
+            X = self.ensemble_scaler.transform(X)
+
+            p_gb  = float(self.ensemble_gb.predict_proba(X)[0][1])
+            p_rf  = float(self.ensemble_rf.predict_proba(X)[0][1])
+            p_xgb = float(self.ensemble_xgb.predict_proba(X)[0][1])
+            avg   = (p_gb + p_rf + p_xgb) / 3.0
+
+            print(f"  Ensemble GB:  {p_gb:.4f}")
+            print(f"  Ensemble RF:  {p_rf:.4f}")
+            print(f"  Ensemble XGB: {p_xgb:.4f}")
+            print(f"  Ensemble Avg: {avg:.4f}")
+
+            return avg
+
+        except Exception as e:
+            print(f"  Error in ensemble audio prediction: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def predict_new_audio_risk(self, audio_path: Optional[str]) -> Optional[float]:
+        """
+        Predict dysarthria risk using the new ONNX DL models.
+        """
+        if not audio_path or not hasattr(self, 'stroke_detector') or not self.stroke_detector:
+            return None
             
-            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+        try:
+            from utils.audio_features import load_audio_keras, extract_2d_features, extract_1d_features
             
-            if self.new_audio_imputer:
-                X = self.new_audio_imputer.transform(X)
-            if self.new_audio_scaler:
-                X = self.new_audio_scaler.transform(X)
+            # Extract Keras features
+            y = load_audio_keras(audio_path)
+            if y is None:
+                return None
+                
+            X_2d = extract_2d_features(y)
+            X_1d = extract_1d_features(y)
             
-            prob = float(self.new_audio_model.predict_proba(X)[0][1])  # P(dysarthric)
-            return prob
+            # Predict
+            import numpy as np
+            X_2d_batch = np.expand_dims(X_2d, axis=0).astype(np.float32)
+            X_1d_batch = np.expand_dims(X_1d, axis=0).astype(np.float32)
+            
+            # Apply the scaler that was used during training
+            if self.dl_audio_scaler is not None:
+                X_1d_batch = self.dl_audio_scaler.transform(X_1d_batch).astype(np.float32)
+            
+            # Replace any NaN/Inf values
+            X_1d_batch = np.nan_to_num(X_1d_batch, nan=0.0, posinf=0.0, neginf=0.0)
+            
+            def run_onnx_model(session, x2d, x1d):
+                inputs = {}
+                for inp in session.get_inputs():
+                    if len(inp.shape) == 4:
+                        inputs[inp.name] = x2d
+                    else:
+                        inputs[inp.name] = x1d
+                output_name = session.get_outputs()[0].name
+                res = session.run([output_name], inputs)
+                return float(res[0][0][0])
+            
+            # Model 1: Stroke Detector (P(dysarthria))
+            stroke_prob = run_onnx_model(self.stroke_detector, X_2d_batch, X_1d_batch)
+            
+            # Model 2: Normal Classifier (P(normal))
+            normal_prob = run_onnx_model(self.normal_classifier, X_2d_batch, X_1d_batch)
+            
+            # Combine: Dysarthria score from normal model is (1.0 - P(normal))
+            normal_dysarthria_prob = 1.0 - normal_prob
+            
+            # Weighted average
+            final_prob = (stroke_prob * self.stroke_detector_weights) + (normal_dysarthria_prob * self.normal_classifier_weights)
+            
+            print(f"  DL Stroke Detector: {stroke_prob:.4f}")
+            print(f"  DL Normal Classifier (inverted): {normal_dysarthria_prob:.4f}")
+            print(f"  DL Ensemble Risk: {final_prob:.4f}")
+            
+            return final_prob
             
         except Exception as e:
-            print(f"  Error in new audio model prediction: {e}")
+            print(f"  Error in DL audio model prediction: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -365,25 +485,36 @@ class StrokeRiskScorer:
                 has_audio = True
                 print("\n--- Audio Analysis ---")
                 
-                # Try new audio model first (274-feature VotingClassifier)
-                new_audio_risk = self.predict_new_audio_risk(audio_model_features)
-                if new_audio_risk is not None:
-                    print(f"New Audio Model (274f) Prediction: {new_audio_risk:.4f}")
-                    model_audio_risk = new_audio_risk
+                # audio_model_features is set to the audio file path by triage_service.py
+                audio_path_dl = None
+                if isinstance(audio_model_features, str):
+                    audio_path_dl = audio_model_features
+                
+                # Try ensemble (GB + RF + XGB) first
+                ensemble_risk = self.predict_ensemble_audio_risk(audio_path_dl)
+                if ensemble_risk is not None:
+                    print(f"Ensemble Audio (GB+RF+XGB) Prediction: {ensemble_risk:.4f}")
+                    model_audio_risk = ensemble_risk
                 else:
-                    # Fall back to legacy audio model (37 features)
-                    audio_vec = self.prepare_audio_features(audio_features)
-                    if audio_vec is not None and self.audio_model:
-                        if self.audio_scaler:
-                            scaled_audio = self.audio_scaler.transform(audio_vec)
-                        else:
-                            scaled_audio = audio_vec
-                        probs = self.audio_model.predict_proba(scaled_audio)
-                        model_audio_risk = float(probs[0][1]) if probs.shape[1] > 1 else 0.0
-                        print(f"Legacy Audio Model Prediction: {model_audio_risk:.4f}")
+                    # Fall back to DL ONNX audio models
+                    new_audio_risk = self.predict_new_audio_risk(audio_path_dl)
+                    if new_audio_risk is not None:
+                        print(f"Keras DL Audio Model Prediction: {new_audio_risk:.4f}")
+                        model_audio_risk = new_audio_risk
                     else:
-                        model_audio_risk = 0.0
-                        print("Audio models not available, using rules only")
+                        # Fall back to legacy audio model (37 features)
+                        audio_vec = self.prepare_audio_features(audio_features)
+                        if audio_vec is not None and self.audio_model:
+                            if self.audio_scaler:
+                                scaled_audio = self.audio_scaler.transform(audio_vec)
+                            else:
+                                scaled_audio = audio_vec
+                            probs = self.audio_model.predict_proba(scaled_audio)
+                            model_audio_risk = float(probs[0][1]) if probs.shape[1] > 1 else 0.0
+                            print(f"Legacy Audio Model Prediction: {model_audio_risk:.4f}")
+                        else:
+                            model_audio_risk = 0.0
+                            print("Audio models not available, using rules only")
                 
                 # Rule-based safety net (uses legacy features)
                 if audio_features:
@@ -468,14 +599,14 @@ class StrokeRiskScorer:
                     safety_net_triggered = True
             
             # Safety net override for ML model dysarthria detection
-            # The VotingClassifier (98% accuracy) predicts P(dysarthric);
-            # if it's high, slurred speech must escalate regardless of clinical risk.
-            if has_audio and model_audio_risk >= 0.80:
+            # Thresholds tuned for the GB+RF+XGB ensemble which produces
+            # moderate probabilities; only override on high-confidence detections.
+            if has_audio and model_audio_risk >= 0.85:
                 if final_risk < 0.85:
                     print(f"(!) CRITICAL AUDIO OVERRIDE (ML model): {final_risk:.4f} -> 0.85 (P(dysarthric)={model_audio_risk:.4f})")
                     final_risk = 0.85
                     safety_net_triggered = True
-            elif has_audio and model_audio_risk >= 0.60:
+            elif has_audio and model_audio_risk >= 0.75:
                 if final_risk < 0.60:
                     print(f"(!) SAFETY AUDIO OVERRIDE (ML model): {final_risk:.4f} -> 0.60 (P(dysarthric)={model_audio_risk:.4f})")
                     final_risk = 0.60

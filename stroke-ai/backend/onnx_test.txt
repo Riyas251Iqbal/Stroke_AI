@@ -1,0 +1,4 @@
+loaded: True shape: (48000,)
+2d: (128, 128, 3) min=0.0000 max=1.0000
+1d: (256,) len=256
+Model1 stroke_prob: [[0.]]

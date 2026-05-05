@@ -513,6 +513,139 @@ def deactivate_hospital(current_user, hospital_id):
 
 
 # =====================================================
+# PENDING HOSPITAL REQUESTS
+# =====================================================
+
+@admin_bp.route('/pending-hospitals', methods=['GET'])
+@token_required
+@role_required('admin')
+def get_pending_hospitals(current_user):
+    """Get all pending hospital requests with submitter info."""
+    try:
+        status_filter = request.args.get('status', 'pending')
+        
+        query = """
+            SELECT ph.*, u.full_name as submitted_by_name, u.email as submitted_by_email
+            FROM pending_hospitals ph
+            LEFT JOIN users u ON ph.submitted_by = u.id
+        """
+        params = []
+        
+        if status_filter and status_filter != 'all':
+            query += " WHERE ph.status = ?"
+            params.append(status_filter)
+        
+        query += " ORDER BY ph.created_at DESC"
+        pending = execute_query(query, tuple(params))
+        
+        return jsonify({
+            'pending_hospitals': pending,
+            'count': len(pending)
+        }), 200
+    
+    except Exception as e:
+        return jsonify({'error': f'Error fetching pending hospitals: {str(e)}'}), 500
+
+
+@admin_bp.route('/pending-hospitals/<int:pending_id>/approve', methods=['POST'])
+@token_required
+@role_required('admin')
+def approve_pending_hospital(current_user, pending_id):
+    """
+    Approve a pending hospital request.
+    Creates the hospital in the hospitals table and updates the doctor's hospital_id.
+    """
+    try:
+        # Get the pending request
+        pending = execute_query(
+            "SELECT * FROM pending_hospitals WHERE id = ? AND status = 'pending'",
+            (pending_id,),
+            fetch_one=True
+        )
+        
+        if not pending:
+            return jsonify({'error': 'Pending hospital request not found or already processed'}), 404
+        
+        # Create the hospital in the hospitals table
+        from utils.db import execute_insert
+        hospital_id = execute_insert("""
+            INSERT INTO hospitals (name, location, address, phone, is_active)
+            VALUES (?, ?, ?, ?, 1)
+        """, (
+            pending['name'],
+            pending['location'],
+            pending['address'],
+            pending['phone']
+        ))
+        
+        # Update the pending request status
+        execute_update(
+            "UPDATE pending_hospitals SET status = 'approved', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (current_user['id'], pending_id)
+        )
+        
+        # Update the doctor's hospital_id if they submitted it
+        if pending['submitted_by']:
+            execute_update(
+                "UPDATE users SET hospital_id = ? WHERE id = ?",
+                (hospital_id, pending['submitted_by'])
+            )
+        
+        log_audit(
+            user_id=current_user['id'],
+            action='pending_hospital_approved',
+            resource_type='hospital',
+            resource_id=hospital_id,
+            details=f"Approved pending hospital: {pending['name']} ({pending['location']})"
+        )
+        
+        return jsonify({
+            'message': f"Hospital '{pending['name']}' approved and added to the system",
+            'hospital_id': hospital_id
+        }), 200
+    
+    except Exception as e:
+        return jsonify({'error': f'Error approving hospital: {str(e)}'}), 500
+
+
+@admin_bp.route('/pending-hospitals/<int:pending_id>/reject', methods=['POST'])
+@token_required
+@role_required('admin')
+def reject_pending_hospital(current_user, pending_id):
+    """Reject a pending hospital request with an optional note."""
+    try:
+        data = request.get_json() or {}
+        note = data.get('note', '')
+        
+        pending = execute_query(
+            "SELECT * FROM pending_hospitals WHERE id = ? AND status = 'pending'",
+            (pending_id,),
+            fetch_one=True
+        )
+        
+        if not pending:
+            return jsonify({'error': 'Pending hospital request not found or already processed'}), 404
+        
+        execute_update(
+            "UPDATE pending_hospitals SET status = 'rejected', reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP, review_note = ? WHERE id = ?",
+            (current_user['id'], note, pending_id)
+        )
+        
+        log_audit(
+            user_id=current_user['id'],
+            action='pending_hospital_rejected',
+            resource_type='pending_hospital',
+            resource_id=pending_id,
+            details=f"Rejected: {pending['name']}. Note: {note}"
+        )
+        
+        return jsonify({'message': 'Hospital request rejected'}), 200
+    
+    except Exception as e:
+        return jsonify({'error': f'Error rejecting hospital: {str(e)}'}), 500
+
+
+# =====================================================
 # ACCOUNT DELETION MANAGEMENT
 # =====================================================
 

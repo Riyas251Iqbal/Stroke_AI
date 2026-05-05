@@ -142,3 +142,70 @@ def get_nearby_doctors():
     
     except Exception as e:
         return jsonify({'error': f'Error fetching nearby doctors: {str(e)}'}), 500
+
+
+@hospital_bp.route('/request', methods=['POST'])
+def submit_hospital_request():
+    """
+    Submit a new hospital request (during doctor registration).
+    Hospital will be pending until admin approves it.
+    
+    Request body:
+        {
+            "name": "string",
+            "location": "string",
+            "address": "string" (optional),
+            "phone": "string" (optional),
+            "submitted_by": int (optional, user_id of the doctor)
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        if not data.get('name') or not data.get('location'):
+            return jsonify({'error': 'Hospital name and location are required'}), 400
+        
+        # Check for duplicate pending requests
+        existing = execute_query("""
+            SELECT id FROM pending_hospitals 
+            WHERE LOWER(name) = LOWER(?) AND LOWER(location) = LOWER(?) AND status = 'pending'
+        """, (data['name'], data['location']), fetch_one=True)
+        
+        if existing:
+            return jsonify({'error': 'A request for this hospital is already pending'}), 409
+        
+        # Also check if hospital already exists in active list
+        active = execute_query("""
+            SELECT id FROM hospitals 
+            WHERE LOWER(name) = LOWER(?) AND LOWER(location) = LOWER(?) AND is_active = 1
+        """, (data['name'], data['location']), fetch_one=True)
+        
+        if active:
+            return jsonify({
+                'error': 'This hospital already exists',
+                'hospital_id': active['id']
+            }), 409
+        
+        from utils.db import execute_update
+        pending_id = execute_update("""
+            INSERT INTO pending_hospitals (name, location, address, phone, submitted_by)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            data['name'],
+            data['location'],
+            data.get('address', ''),
+            data.get('phone', ''),
+            data.get('submitted_by')
+        ))
+        
+        return jsonify({
+            'message': 'Hospital request submitted successfully. It will be available after admin approval.',
+            'pending_hospital_id': pending_id
+        }), 201
+    
+    except Exception as e:
+        return jsonify({'error': f'Error submitting hospital request: {str(e)}'}), 500
+

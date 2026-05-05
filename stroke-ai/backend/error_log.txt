@@ -1,0 +1,23 @@
+Testing audio path: E:\Main_Project\stroke-ai\stroke-ai\backend\audio\uploads\patient_19_20260326_213954.wav
+E:\Main_Project\stroke-ai\stroke-ai\backend\venv\lib\site-packages\sklearn\base.py:376: InconsistentVersionWarning: Trying to unpickle estimator LogisticRegression from version 1.6.1 when using version 1.4.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+  Error loading audio_model.pkl: No module named '_loss'
+E:\Main_Project\stroke-ai\stroke-ai\backend\venv\lib\site-packages\sklearn\base.py:376: InconsistentVersionWarning: Trying to unpickle estimator StandardScaler from version 1.6.1 when using version 1.4.2. This might lead to breaking code or invalid results. Use at your own risk. For more info please refer to:
+https://scikit-learn.org/stable/model_persistence.html#security-maintainability-limitations
+  warnings.warn(
+
+[TensorFlow DLL Diagnostic] Analyzing: E:\Main_Project\stroke-ai\stroke-ai\backend\venv\lib\site-packages\tensorflow\python\_pywrap_tensorflow_internal.pyd
+[Error] Failed to load _pywrap_tensorflow_common.dll: INITIALIZATION FAILED (0x45A) - The DLL's DllMain returned false.
+    Hint: This often happens if your CPU lacks required instructions (like AVX/AVX2)
+    or if the Microsoft Visual C++ Redistributable is outdated/missing.
+  [ERROR] TensorFlow is not installed. Deep learning models cannot be loaded.
+[OK] Models loaded successfully from e:\Main_Project\stroke-ai\stroke-ai\backend\models
+     Components: Clinical, ClinicalScaler
+Returned Final Ensembled Risk Score: None
+
+Final DB Triage Result:
+Risk Score: 0.0
+Level: Low
+Confidence: 0.75
+Assessment Type: clinical_audio
